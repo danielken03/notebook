@@ -18,6 +18,13 @@ const db = getFirestore(app);
 const FONT = "'Courier New', monospace";
 const defaultTree = { type: "folder", children: {} };
 
+async function hashPassword(password) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function save(uid, tree) {
   await setDoc(doc(db, "notebooks", uid), { tree: JSON.stringify(tree) });
 }
@@ -55,7 +62,38 @@ const s = {
   textarea: { flex: 1, fontFamily: FONT, fontSize: 14, border: "none", outline: "none", background: "transparent", resize: "none", lineHeight: 1.7, color: "#333" },
   back: { marginBottom: 24, background: "none", border: "none", cursor: "pointer", fontFamily: FONT, fontSize: 13, color: "#888", padding: 0, textDecoration: "underline" },
   signIn: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", fontFamily: FONT, background: "#fafaf8", gap: 16 },
+  modal: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 },
+  modalBox: { background: "#fafaf8", padding: "32px", fontFamily: FONT, display: "flex", flexDirection: "column", gap: 16, minWidth: 280, border: "1px solid #eee" },
+  modalInput: { fontFamily: FONT, fontSize: 14, border: "none", borderBottom: "1px solid #999", background: "transparent", outline: "none", padding: "4px 0", width: "100%" },
 };
+
+// Password prompt modal
+function PasswordModal({ title, onConfirm, onCancel, error }) {
+  const [value, setValue] = useState("");
+  const inputRef = useRef();
+  useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
+  return (
+    <div style={s.modal}>
+      <div style={s.modalBox}>
+        <div style={{ fontSize: 14, color: "#222" }}>🔒 {title}</div>
+        <input
+          ref={inputRef}
+          style={s.modalInput}
+          type="password"
+          placeholder="enter password…"
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") onConfirm(value); if (e.key === "Escape") onCancel(); }}
+        />
+        {error && <div style={{ fontSize: 12, color: "#c00" }}>incorrect password</div>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={s.btn} onClick={() => onConfirm(value)}>unlock</button>
+          <button style={{ ...s.btn, border: "none" }} onClick={onCancel}>cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function SharedView({ id }) {
   const [data, setData] = useState(null);
@@ -130,6 +168,22 @@ export default function App() {
   const [copied, setCopied] = useState(null);
   const inputRef = useRef();
   const renameRef = useRef();
+  const lockPasswordRef = useRef();
+
+  // Lock state during creation
+  const [lockEnabled, setLockEnabled] = useState(false);
+  const [lockPassword, setLockPassword] = useState("");
+
+  // Tracks which nodes are unlocked this session: key = path+name joined
+  const [unlockedKeys, setUnlockedKeys] = useState(new Set());
+
+  // Password prompt state
+  const [promptFor, setPromptFor] = useState(null); // { name, node, action: "open"|"enter" }
+  const [promptError, setPromptError] = useState(false);
+
+  useEffect(() => { if (creating && inputRef.current) inputRef.current.focus(); }, [creating]);
+  useEffect(() => { if (renaming && renameRef.current) renameRef.current.focus(); }, [renaming]);
+  useEffect(() => { if (lockEnabled && lockPasswordRef.current) lockPasswordRef.current.focus(); }, [lockEnabled]);
 
   useEffect(() => onAuthStateChanged(auth, async (u) => {
     setUser(u);
@@ -137,20 +191,78 @@ export default function App() {
     else setTree(null);
   }), []);
 
-  useEffect(() => { if (creating && inputRef.current) inputRef.current.focus(); }, [creating]);
-  useEffect(() => { if (renaming && renameRef.current) renameRef.current.focus(); }, [renaming]);
-
   function update(newTree) { setTree(newTree); save(user.uid, newTree); }
 
-  function create() {
+  function nodeKey(nodePath, name) {
+    return [...nodePath, name].join("/");
+  }
+
+  function isUnlocked(name) {
+    return unlockedKeys.has(nodeKey(path, name));
+  }
+
+  function unlock(name) {
+    setUnlockedKeys(prev => new Set([...prev, nodeKey(path, name)]));
+  }
+
+  async function handlePromptConfirm(password) {
+    if (!promptFor) return;
+    const { name, node, action } = promptFor;
+    const hash = await hashPassword(password);
+    if (hash !== node.passwordHash) {
+      setPromptError(true);
+      return;
+    }
+    unlock(name);
+    setPromptFor(null);
+    setPromptError(false);
+    if (action === "open") {
+      if (node.type === "folder") {
+        setPath([...path, name]);
+      } else {
+        setOpenPage({ name, content: node.content });
+      }
+    }
+  }
+
+  function handleItemClick(name, node) {
+    if (node.locked && !isUnlocked(name)) {
+      setPromptFor({ name, node, action: "open" });
+      setPromptError(false);
+      return;
+    }
+    if (node.type === "folder") setPath([...path, name]);
+    else setOpenPage({ name, content: node.content });
+  }
+
+  async function create() {
     const name = newName.trim();
     if (!name || folder.children[name]) return;
+
+    let passwordHash = null;
+    if (lockEnabled) {
+      if (!lockPassword.trim()) return;
+      passwordHash = await hashPassword(lockPassword);
+    }
+
     const newTree = JSON.parse(JSON.stringify(tree));
-    getNode(newTree, path).children[name] = creating === "folder"
-      ? { type: "folder", children: {} }
-      : { type: "page", content: "" };
+    const newNode = creating === "folder"
+      ? { type: "folder", children: {}, ...(passwordHash && { locked: true, passwordHash }) }
+      : { type: "page", content: "", ...(passwordHash && { locked: true, passwordHash }) };
+
+    getNode(newTree, path).children[name] = newNode;
     update(newTree);
-    setCreating(null); setNewName("");
+    setCreating(null);
+    setNewName("");
+    setLockEnabled(false);
+    setLockPassword("");
+  }
+
+  function cancelCreate() {
+    setCreating(null);
+    setNewName("");
+    setLockEnabled(false);
+    setLockPassword("");
   }
 
   function deleteItem(name) {
@@ -212,6 +324,16 @@ export default function App() {
 
   return (
     <div style={s.app}>
+      {/* Password prompt modal */}
+      {promptFor && (
+        <PasswordModal
+          title={`"${promptFor.name}" is locked`}
+          onConfirm={handlePromptConfirm}
+          onCancel={() => { setPromptFor(null); setPromptError(false); }}
+          error={promptError}
+        />
+      )}
+
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 32, flexWrap: "wrap" }}>
         <button style={s.crumb} onClick={() => setPath([])}>notebook</button>
         {path.map((p, i) => (
@@ -239,9 +361,9 @@ export default function App() {
               onKeyDown={e => { if (e.key === "Enter") rename(name); if (e.key === "Escape") setRenaming(null); }}
               onBlur={() => rename(name)} />
           ) : (
-            <button style={s.name} onClick={() =>
-              node.type === "folder" ? setPath([...path, name]) : setOpenPage({ name, content: node.content })
-            }>{name}</button>
+            <button style={s.name} onClick={() => handleItemClick(name, node)}>
+              {node.locked && !isUnlocked(name) ? "🔒 " : ""}{name}
+            </button>
           )}
           <button style={s.iconBtn} title="rename" onClick={() => { setRenaming(name); setRenameTo(name); }}>✎</button>
           <button style={s.iconBtn} title="share" onClick={() => share(name, node)}>{copied === name ? "✓" : "⤴"}</button>
@@ -250,13 +372,35 @@ export default function App() {
       ))}
 
       {creating && (
-        <div style={{ ...s.row, gap: 8 }}>
-          <span style={s.icon}>{creating === "folder" ? "▶" : "·"}</span>
-          <input ref={inputRef} style={s.inlineInput} value={newName} onChange={e => setNewName(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") create(); if (e.key === "Escape") { setCreating(null); setNewName(""); } }}
-            placeholder={`${creating} name…`} />
-          <button style={s.btn} onClick={create}>ok</button>
-          <button style={{ ...s.btn, border: "none" }} onClick={() => { setCreating(null); setNewName(""); }}>cancel</button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 0", borderBottom: "1px solid #eee" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={s.icon}>{creating === "folder" ? "▶" : "·"}</span>
+            <input ref={inputRef} style={s.inlineInput} value={newName} onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && !lockEnabled) create(); if (e.key === "Escape") cancelCreate(); }}
+              placeholder={`${creating} name…`} />
+            {/* Lock toggle button */}
+            <button
+              style={{ ...s.iconBtn, color: lockEnabled ? "#555" : "#ccc", fontSize: 14 }}
+              title={lockEnabled ? "remove lock" : "add lock"}
+              onClick={() => { setLockEnabled(v => !v); setLockPassword(""); }}
+            >🔒</button>
+            <button style={s.btn} onClick={create}>ok</button>
+            <button style={{ ...s.btn, border: "none" }} onClick={cancelCreate}>cancel</button>
+          </div>
+          {lockEnabled && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 26 }}>
+              <span style={{ fontSize: 12, color: "#aaa" }}>password:</span>
+              <input
+                ref={lockPasswordRef}
+                style={{ ...s.inlineInput, width: 160 }}
+                type="password"
+                placeholder="set a password…"
+                value={lockPassword}
+                onChange={e => setLockPassword(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") create(); if (e.key === "Escape") cancelCreate(); }}
+              />
+            </div>
+          )}
         </div>
       )}
 
