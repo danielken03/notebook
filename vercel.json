@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/((?!privacy|terms).*)", "destination": "/index.html" }
+  ]
+}
