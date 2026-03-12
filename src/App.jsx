@@ -206,24 +206,24 @@ export default function App() {
   }
 
   async function handlePromptConfirm(password) {
-    if (!promptFor) return;
-    const { name, node, action } = promptFor;
-    const hash = await hashPassword(password);
-    if (hash !== node.passwordHash) {
-      setPromptError(true);
-      return;
-    }
-    unlock(name);
-    setPromptFor(null);
-    setPromptError(false);
-    if (action === "open") {
-      if (node.type === "folder") {
-        setPath([...path, name]);
-      } else {
-        setOpenPage({ name, content: node.content });
-      }
+  if (!promptFor) return;
+  const { name, node, action } = promptFor;
+  const hash = await hashPassword(password);
+  if (hash !== node.passwordHash) {
+    setPromptError(true);
+    return;
+  }
+  // Don't call unlock(name) — just act directly
+  setPromptFor(null);
+  setPromptError(false);
+  if (action === "open") {
+    if (node.type === "folder") {
+      setPath([...path, name]);
+    } else {
+      setOpenPage({ name, content: node.content });
     }
   }
+}
 
   function handleItemClick(name, node) {
     if (node.locked && !isUnlocked(name)) {
