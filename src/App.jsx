@@ -4,12 +4,12 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChang
 import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAWzx5J6qY4IUobirISZcp8X4IG-SmH2jU",
-  authDomain: "kenndoesdev.firebaseapp.com",
-  projectId: "kenndoesdev",
-  storageBucket: "kenndoesdev.firebasestorage.app",
-  messagingSenderId: "490346526289",
-  appId: "1:490346526289:web:7bff1fe7cc8a4c2bcdea70",
+  apiKey: "AIzaSyA1nVimSTwFWvAPbMQ3ZT7RIrrHZyvUQIo",
+  authDomain: "notebook-7276b.firebaseapp.com",
+  projectId: "notebook-7276b",
+  storageBucket: "notebook-7276b.firebasestorage.app",
+  messagingSenderId: "185736803134",
+  appId: "1:185736803134:web:c3e611d4d471d7464db26f",
 };
 
 const app = initializeApp(firebaseConfig);
