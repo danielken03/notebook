@@ -32,14 +32,19 @@ async function load(uid) {
   const snap = await getDoc(doc(db, "notebooks", uid));
   return snap.exists() ? JSON.parse(snap.data().tree) : defaultTree;
 }
-async function createShare(subtree, name) {
+async function createShare(subtree, name, mode = "read") {
   const id = Math.random().toString(36).slice(2, 12);
-  await setDoc(doc(db, "shared", id), { tree: JSON.stringify(subtree), name });
+  await setDoc(doc(db, "shared", id), { tree: JSON.stringify(subtree), name, mode });
   return id;
 }
 async function loadShare(id) {
   const snap = await getDoc(doc(db, "shared", id));
-  return snap.exists() ? { tree: JSON.parse(snap.data().tree), name: snap.data().name } : null;
+  return snap.exists()
+    ? { tree: JSON.parse(snap.data().tree), name: snap.data().name, mode: snap.data().mode || "read" }
+    : null;
+}
+async function saveSharedTree(id, subtree) {
+  await setDoc(doc(db, "shared", id), { tree: JSON.stringify(subtree) }, { merge: true });
 }
 function getNode(tree, path) {
   let node = tree;
@@ -95,6 +100,68 @@ function PasswordModal({ title, onConfirm, onCancel, error }) {
   );
 }
 
+function ShareModal({ name, onShare, onClose }) {
+  const [url, setUrl] = useState(null);
+  const [loading, setLoading] = useState(null); // "read" | "edit"
+  const [copied, setCopied] = useState(false);
+
+  async function handleShare(mode) {
+    setLoading(mode);
+    const shareUrl = await onShare(mode);
+    setUrl(shareUrl);
+    setLoading(null);
+    await navigator.clipboard.writeText(shareUrl).catch(() => {});
+    setCopied(true);
+  }
+
+  return (
+    <div style={s.modal}>
+      <div style={s.modalBox}>
+        <div style={{ fontSize: 14, color: "#222", marginBottom: 4 }}>share "{name}"</div>
+        {!url ? (
+          <>
+            <div style={{ fontSize: 12, color: "#aaa", marginBottom: 8 }}>choose access level:</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                style={{ ...s.btn, flex: 1 }}
+                disabled={!!loading}
+                onClick={() => handleShare("read")}
+              >
+                {loading === "read" ? "…" : "👁 read only"}
+              </button>
+              <button
+                style={{ ...s.btn, flex: 1 }}
+                disabled={!!loading}
+                onClick={() => handleShare("edit")}
+              >
+                {loading === "edit" ? "…" : "✏ read + edit"}
+              </button>
+            </div>
+            <button style={{ ...s.btn, border: "none", alignSelf: "flex-start" }} onClick={onClose}>cancel</button>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 12, color: "#aaa" }}>link ready — share it with anyone:</div>
+            <div style={{
+              fontFamily: FONT, fontSize: 11, color: "#555", background: "#f3f3f0",
+              padding: "8px 10px", borderRadius: 2, wordBreak: "break-all", userSelect: "all"
+            }}>{url}</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button style={s.btn} onClick={async () => {
+                await navigator.clipboard.writeText(url).catch(() => {});
+                setCopied(true);
+              }}>
+                {copied ? "✓ copied" : "copy link"}
+              </button>
+              <button style={{ ...s.btn, border: "none" }} onClick={onClose}>done</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SharedView({ id }) {
   const [data, setData] = useState(null);
   const [path, setPath] = useState([]);
@@ -106,6 +173,20 @@ function SharedView({ id }) {
   if (data === false) return <div style={{ ...s.signIn, color: "#aaa" }}>link not found</div>;
 
   const root = data.tree;
+  const canEdit = data.mode === "edit";
+  const badge = canEdit
+    ? <span style={{ fontSize: 12, color: "#888" }}>shared · read + edit</span>
+    : <span style={{ fontSize: 12, color: "#bbb" }}>shared · read only</span>;
+
+  async function savePageContent(content) {
+    // Update the local tree and persist to shared doc
+    const newTree = JSON.parse(JSON.stringify(root));
+    const node = openPage.path.reduce((n, p) => n.children[p], newTree);
+    node.content = content;
+    setData({ ...data, tree: newTree });
+    setOpenPage({ ...openPage, content });
+    await saveSharedTree(id, newTree);
+  }
 
   if (root.type === "page" || openPage) {
     const content = openPage ? openPage.content : root.content;
@@ -113,9 +194,20 @@ function SharedView({ id }) {
     return (
       <div style={s.editor}>
         {openPage && <button style={s.back} onClick={() => setOpenPage(null)}>← back</button>}
-        <div style={{ fontSize: 18, marginBottom: 16, color: "#222" }}>{name}</div>
-        <div style={{ ...s.textarea, whiteSpace: "pre-wrap", overflow: "auto" }}>{content || <span style={{ color: "#bbb" }}>empty page</span>}</div>
-        <div style={{ marginTop: 16, fontSize: 12, color: "#bbb" }}>shared · read only</div>
+        <div style={{ fontSize: 18, marginBottom: 12, color: "#222" }}>{name}</div>
+        {canEdit
+          ? <textarea
+              style={s.textarea}
+              defaultValue={content}
+              placeholder="Start writing…"
+              onBlur={e => savePageContent(e.target.value)}
+              autoFocus
+            />
+          : <div style={{ ...s.textarea, whiteSpace: "pre-wrap", overflow: "auto" }}>
+              {content || <span style={{ color: "#bbb" }}>empty page</span>}
+            </div>
+        }
+        <div style={{ marginTop: 16 }}>{badge}</div>
       </div>
     );
   }
@@ -138,13 +230,15 @@ function SharedView({ id }) {
           </span>
         ))}
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 12, color: "#bbb" }}>shared · read only</span>
+        {badge}
       </div>
       {items.map(([name, node]) => (
         <div key={name} style={s.row}>
           <span style={s.icon}>{node.type === "folder" ? "▶" : "·"}</span>
           <button style={s.name} onClick={() =>
-            node.type === "folder" ? setPath([...path, name]) : setOpenPage({ name, content: node.content })
+            node.type === "folder"
+              ? setPath([...path, name])
+              : setOpenPage({ name, content: node.content, path: [...path, name] })
           }>{name}</button>
         </div>
       ))}
@@ -166,6 +260,7 @@ export default function App() {
   const [renaming, setRenaming] = useState(null);
   const [renameTo, setRenameTo] = useState("");
   const [copied, setCopied] = useState(null);
+  const [shareModal, setShareModal] = useState(null); // { name, node }
   const inputRef = useRef();
   const renameRef = useRef();
   const lockPasswordRef = useRef();
@@ -285,12 +380,14 @@ export default function App() {
     if (openPage?.name === oldName) setOpenPage({ ...openPage, name: n });
   }
 
-  async function share(name, node) {
-    const id = await createShare(node, name);
-    const url = `${window.location.origin}/#share/${id}`;
-    await navigator.clipboard.writeText(url);
-    setCopied(name);
-    setTimeout(() => setCopied(null), 2000);
+  function openShare(name, node) {
+    setShareModal({ name, node });
+  }
+
+  async function doShare(mode) {
+    const { name, node } = shareModal;
+    const id = await createShare(node, name, mode);
+    return `${window.location.origin}/#share/${id}`;
   }
 
   function savePage(content) {
@@ -324,6 +421,14 @@ export default function App() {
 
   return (
     <div style={s.app}>
+      {shareModal && (
+        <ShareModal
+          name={shareModal.name}
+          onShare={doShare}
+          onClose={() => setShareModal(null)}
+        />
+      )}
+
       {/* Password prompt modal */}
       {promptFor && (
         <PasswordModal
@@ -366,7 +471,7 @@ export default function App() {
             </button>
           )}
           <button style={s.iconBtn} title="rename" onClick={() => { setRenaming(name); setRenameTo(name); }}>✎</button>
-          <button style={s.iconBtn} title="share" onClick={() => share(name, node)}>{copied === name ? "✓" : "⤴"}</button>
+          <button style={s.iconBtn} title="share" onClick={() => openShare(name, node)}>⤴</button>
           <button style={s.iconBtn} onClick={() => deleteItem(name)}>✕</button>
         </div>
       ))}
