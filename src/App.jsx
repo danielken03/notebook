@@ -465,6 +465,7 @@ export default function App() {
     <div style={s.signIn}>
       <div style={{ fontSize: 18, color: "#222" }}>notebook</div>
       <button style={s.btn} onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}>sign in with google</button>
+      <a href="/private-policy.html" style={{ fontSize: 12, color: "#aaa", marginTop: 24, textDecoration: "underline", fontFamily: FONT }}>privacy policy</a>
     </div>
   );
   if (!tree) return <div style={{ ...s.signIn, color: "#aaa" }}>loading…</div>;
