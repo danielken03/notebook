@@ -119,7 +119,10 @@ function ShareModal({ name, onShare, onClose }) {
 
   async function handleShare() {
     setLoading(true);
-    const shareUrl = await onShare(editors);
+    // Include any email still typed in the input but not yet added
+    const pending = emailInput.trim().toLowerCase();
+    const finalEditors = pending && !editors.includes(pending) ? [...editors, pending] : editors;
+    const shareUrl = await onShare(finalEditors);
     setUrl(shareUrl);
     setLoading(false);
     await navigator.clipboard.writeText(shareUrl).catch(() => {});
@@ -210,15 +213,38 @@ function SharedView({ id }) {
 
   const root = data.tree;
   const viewerEmail = viewer?.email?.toLowerCase() || null;
-  const canEdit = viewerEmail && data.allowedEditors.includes(viewerEmail);
-  const isAllowedEditor = viewerEmail && data.allowedEditors.includes(viewerEmail);
-
-  // If not signed in and there are editors, show a sign-in prompt at the bottom
   const editorsExist = data.allowedEditors.length > 0;
+  const canEdit = editorsExist && viewerEmail && data.allowedEditors.includes(viewerEmail);
+  const wrongAccount = editorsExist && viewer && !canEdit;
 
   const badge = canEdit
     ? <span style={{ fontSize: 12, color: "#888" }}>shared · you can edit</span>
     : <span style={{ fontSize: 12, color: "#bbb" }}>shared · read only</span>;
+
+  // Prominent auth banner shown when edit access exists but viewer can't edit
+  const authBanner = editorsExist && !canEdit && (
+    <div style={{
+      background: "#f5f5f0", border: "1px solid #e8e8e0", borderRadius: 2,
+      padding: "12px 16px", marginBottom: 24, display: "flex",
+      alignItems: "center", gap: 12, flexWrap: "wrap"
+    }}>
+      {!viewer ? (
+        <>
+          <span style={{ fontSize: 13, color: "#555", flex: 1 }}>this link has edit access for certain accounts</span>
+          <button style={s.btn} onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}>
+            sign in with google
+          </button>
+        </>
+      ) : wrongAccount ? (
+        <>
+          <span style={{ fontSize: 13, color: "#555", flex: 1 }}>
+            signed in as <strong>{viewer.email}</strong> · not on the edit list
+          </span>
+          <button style={s.btn} onClick={() => signOut(auth)}>switch account</button>
+        </>
+      ) : null}
+    </div>
+  );
 
   async function savePageContent(content) {
     const newTree = JSON.parse(JSON.stringify(root));
@@ -235,22 +261,13 @@ function SharedView({ id }) {
     return (
       <div style={s.editor}>
         {openPage && <button style={s.back} onClick={() => setOpenPage(null)}>← back</button>}
+        {authBanner}
         <div style={{ fontSize: 18, marginBottom: 12, color: "#222" }}>{name}</div>
         {canEdit
           ? <textarea style={s.textarea} defaultValue={content} placeholder="Start writing…" onBlur={e => savePageContent(e.target.value)} autoFocus />
           : <div style={{ ...s.textarea, whiteSpace: "pre-wrap", overflow: "auto" }}>{content || <span style={{ color: "#bbb" }}>empty page</span>}</div>
         }
-        <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 16 }}>
-          {badge}
-          {editorsExist && !viewer && (
-            <button style={s.btn} onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}>
-              sign in for edit access
-            </button>
-          )}
-          {viewer && !isAllowedEditor && editorsExist && (
-            <span style={{ fontSize: 12, color: "#bbb" }}>({viewer.email} is not on the edit list)</span>
-          )}
-        </div>
+        <div style={{ marginTop: 16 }}>{badge}</div>
       </div>
     );
   }
@@ -262,7 +279,7 @@ function SharedView({ id }) {
 
   return (
     <div style={s.app}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 32, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <button style={s.crumb} onClick={() => setPath([])}>{data.name}</button>
         {path.map((p, i) => (
           <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -276,6 +293,8 @@ function SharedView({ id }) {
         {badge}
       </div>
 
+      {authBanner}
+
       {items.map(([name, node]) => (
         <div key={name} style={s.row}>
           <span style={s.icon}>{node.type === "folder" ? "▶" : "·"}</span>
@@ -287,21 +306,6 @@ function SharedView({ id }) {
         </div>
       ))}
       {items.length === 0 && <div style={{ color: "#bbb", fontSize: 13 }}>empty</div>}
-
-      {/* Sign-in nudge at the bottom */}
-      {editorsExist && (
-        <div style={{ marginTop: 32, display: "flex", alignItems: "center", gap: 12 }}>
-          {!viewer
-            ? <>
-                <span style={{ fontSize: 12, color: "#bbb" }}>have edit access?</span>
-                <button style={s.btn} onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}>sign in with google</button>
-              </>
-            : !isAllowedEditor
-              ? <span style={{ fontSize: 12, color: "#bbb" }}>signed in as {viewer.email} · read only</span>
-              : null
-          }
-        </div>
-      )}
     </div>
   );
 }
