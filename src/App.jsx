@@ -32,15 +32,16 @@ async function load(uid) {
   const snap = await getDoc(doc(db, "notebooks", uid));
   return snap.exists() ? JSON.parse(snap.data().tree) : defaultTree;
 }
-async function createShare(subtree, name, mode = "read") {
+async function createShare(subtree, name, allowedEditors = []) {
   const id = Math.random().toString(36).slice(2, 12);
-  await setDoc(doc(db, "shared", id), { tree: JSON.stringify(subtree), name, mode });
+  const normalized = allowedEditors.map(e => e.trim().toLowerCase()).filter(Boolean);
+  await setDoc(doc(db, "shared", id), { tree: JSON.stringify(subtree), name, allowedEditors: normalized });
   return id;
 }
 async function loadShare(id) {
   const snap = await getDoc(doc(db, "shared", id));
   return snap.exists()
-    ? { tree: JSON.parse(snap.data().tree), name: snap.data().name, mode: snap.data().mode || "read" }
+    ? { tree: JSON.parse(snap.data().tree), name: snap.data().name, allowedEditors: snap.data().allowedEditors || [] }
     : null;
 }
 async function saveSharedTree(id, subtree) {
@@ -102,46 +103,79 @@ function PasswordModal({ title, onConfirm, onCancel, error }) {
 
 function ShareModal({ name, onShare, onClose }) {
   const [url, setUrl] = useState(null);
-  const [loading, setLoading] = useState(null); // "read" | "edit"
+  const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [emailInput, setEmailInput] = useState("");
+  const [editors, setEditors] = useState([]);
+  const emailRef = useRef();
 
-  async function handleShare(mode) {
-    setLoading(mode);
-    const shareUrl = await onShare(mode);
+  function addEmail() {
+    const e = emailInput.trim().toLowerCase();
+    if (!e || editors.includes(e)) { setEmailInput(""); return; }
+    setEditors(prev => [...prev, e]);
+    setEmailInput("");
+    if (emailRef.current) emailRef.current.focus();
+  }
+
+  async function handleShare() {
+    setLoading(true);
+    const shareUrl = await onShare(editors);
     setUrl(shareUrl);
-    setLoading(null);
+    setLoading(false);
     await navigator.clipboard.writeText(shareUrl).catch(() => {});
     setCopied(true);
   }
 
   return (
     <div style={s.modal}>
-      <div style={s.modalBox}>
-        <div style={{ fontSize: 14, color: "#222", marginBottom: 4 }}>share "{name}"</div>
+      <div style={{ ...s.modalBox, maxWidth: 360, width: "100%" }}>
+        <div style={{ fontSize: 14, color: "#222" }}>share "{name}"</div>
+
         {!url ? (
           <>
-            <div style={{ fontSize: 12, color: "#aaa", marginBottom: 8 }}>choose access level:</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                style={{ ...s.btn, flex: 1 }}
-                disabled={!!loading}
-                onClick={() => handleShare("read")}
-              >
-                {loading === "read" ? "…" : "👁 read only"}
-              </button>
-              <button
-                style={{ ...s.btn, flex: 1 }}
-                disabled={!!loading}
-                onClick={() => handleShare("edit")}
-              >
-                {loading === "edit" ? "…" : "✏ read + edit"}
-              </button>
+            <div style={{ fontSize: 12, color: "#aaa" }}>
+              anyone with the link can view. add emails below to grant edit access.
             </div>
-            <button style={{ ...s.btn, border: "none", alignSelf: "flex-start" }} onClick={onClose}>cancel</button>
+
+            {/* Email input */}
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                ref={emailRef}
+                style={{ ...s.modalInput, flex: 1 }}
+                type="email"
+                placeholder="editor email address…"
+                value={emailInput}
+                onChange={e => setEmailInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addEmail(); } if (e.key === "Escape") onClose(); }}
+              />
+              <button style={s.btn} onClick={addEmail}>add</button>
+            </div>
+
+            {/* Editor list */}
+            {editors.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ fontSize: 11, color: "#aaa", marginBottom: 2 }}>can edit:</div>
+                {editors.map(e => (
+                  <div key={e} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#555" }}>
+                    <span style={{ flex: 1 }}>✏ {e}</span>
+                    <button style={{ ...s.iconBtn, color: "#ccc", fontSize: 11 }} onClick={() => setEditors(prev => prev.filter(x => x !== e))}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+              <button style={{ ...s.btn, flex: 1 }} disabled={loading} onClick={handleShare}>
+                {loading ? "…" : "create link"}
+              </button>
+              <button style={{ ...s.btn, border: "none" }} onClick={onClose}>cancel</button>
+            </div>
           </>
         ) : (
           <>
-            <div style={{ fontSize: 12, color: "#aaa" }}>link ready — share it with anyone:</div>
+            <div style={{ fontSize: 12, color: "#aaa" }}>
+              link ready — anyone can view{editors.length > 0 ? `, ${editors.length === 1 ? "1 person" : `${editors.length} people`} can edit` : ""}:
+            </div>
             <div style={{
               fontFamily: FONT, fontSize: 11, color: "#555", background: "#f3f3f0",
               padding: "8px 10px", borderRadius: 2, wordBreak: "break-all", userSelect: "all"
@@ -166,22 +200,29 @@ function SharedView({ id }) {
   const [data, setData] = useState(null);
   const [path, setPath] = useState([]);
   const [openPage, setOpenPage] = useState(null);
+  const [viewer, setViewer] = useState(undefined); // undefined = loading, null = signed out
 
   useEffect(() => { loadShare(id).then(d => setData(d || false)); }, [id]);
+  useEffect(() => onAuthStateChanged(auth, u => setViewer(u || null)), []);
 
-  if (data === null) return <div style={{ ...s.signIn, color: "#aaa" }}>loading…</div>;
+  if (data === null || viewer === undefined) return <div style={{ ...s.signIn, color: "#aaa" }}>loading…</div>;
   if (data === false) return <div style={{ ...s.signIn, color: "#aaa" }}>link not found</div>;
 
   const root = data.tree;
-  const canEdit = data.mode === "edit";
+  const viewerEmail = viewer?.email?.toLowerCase() || null;
+  const canEdit = viewerEmail && data.allowedEditors.includes(viewerEmail);
+  const isAllowedEditor = viewerEmail && data.allowedEditors.includes(viewerEmail);
+
+  // If not signed in and there are editors, show a sign-in prompt at the bottom
+  const editorsExist = data.allowedEditors.length > 0;
+
   const badge = canEdit
-    ? <span style={{ fontSize: 12, color: "#888" }}>shared · read + edit</span>
+    ? <span style={{ fontSize: 12, color: "#888" }}>shared · you can edit</span>
     : <span style={{ fontSize: 12, color: "#bbb" }}>shared · read only</span>;
 
   async function savePageContent(content) {
-    // Update the local tree and persist to shared doc
     const newTree = JSON.parse(JSON.stringify(root));
-    const node = openPage.path.reduce((n, p) => n.children[p], newTree);
+    const node = openPage.nodePath.reduce((n, p) => n.children[p], newTree);
     node.content = content;
     setData({ ...data, tree: newTree });
     setOpenPage({ ...openPage, content });
@@ -196,18 +237,20 @@ function SharedView({ id }) {
         {openPage && <button style={s.back} onClick={() => setOpenPage(null)}>← back</button>}
         <div style={{ fontSize: 18, marginBottom: 12, color: "#222" }}>{name}</div>
         {canEdit
-          ? <textarea
-              style={s.textarea}
-              defaultValue={content}
-              placeholder="Start writing…"
-              onBlur={e => savePageContent(e.target.value)}
-              autoFocus
-            />
-          : <div style={{ ...s.textarea, whiteSpace: "pre-wrap", overflow: "auto" }}>
-              {content || <span style={{ color: "#bbb" }}>empty page</span>}
-            </div>
+          ? <textarea style={s.textarea} defaultValue={content} placeholder="Start writing…" onBlur={e => savePageContent(e.target.value)} autoFocus />
+          : <div style={{ ...s.textarea, whiteSpace: "pre-wrap", overflow: "auto" }}>{content || <span style={{ color: "#bbb" }}>empty page</span>}</div>
         }
-        <div style={{ marginTop: 16 }}>{badge}</div>
+        <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 16 }}>
+          {badge}
+          {editorsExist && !viewer && (
+            <button style={s.btn} onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}>
+              sign in for edit access
+            </button>
+          )}
+          {viewer && !isAllowedEditor && editorsExist && (
+            <span style={{ fontSize: 12, color: "#bbb" }}>({viewer.email} is not on the edit list)</span>
+          )}
+        </div>
       </div>
     );
   }
@@ -232,17 +275,33 @@ function SharedView({ id }) {
         <span style={{ flex: 1 }} />
         {badge}
       </div>
+
       {items.map(([name, node]) => (
         <div key={name} style={s.row}>
           <span style={s.icon}>{node.type === "folder" ? "▶" : "·"}</span>
           <button style={s.name} onClick={() =>
             node.type === "folder"
               ? setPath([...path, name])
-              : setOpenPage({ name, content: node.content, path: [...path, name] })
+              : setOpenPage({ name, content: node.content, nodePath: [...path, name] })
           }>{name}</button>
         </div>
       ))}
       {items.length === 0 && <div style={{ color: "#bbb", fontSize: 13 }}>empty</div>}
+
+      {/* Sign-in nudge at the bottom */}
+      {editorsExist && (
+        <div style={{ marginTop: 32, display: "flex", alignItems: "center", gap: 12 }}>
+          {!viewer
+            ? <>
+                <span style={{ fontSize: 12, color: "#bbb" }}>have edit access?</span>
+                <button style={s.btn} onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}>sign in with google</button>
+              </>
+            : !isAllowedEditor
+              ? <span style={{ fontSize: 12, color: "#bbb" }}>signed in as {viewer.email} · read only</span>
+              : null
+          }
+        </div>
+      )}
     </div>
   );
 }
@@ -384,9 +443,9 @@ export default function App() {
     setShareModal({ name, node });
   }
 
-  async function doShare(mode) {
+  async function doShare(allowedEditors) {
     const { name, node } = shareModal;
-    const id = await createShare(node, name, mode);
+    const id = await createShare(node, name, allowedEditors);
     return `${window.location.origin}/#share/${id}`;
   }
 
