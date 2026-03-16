@@ -2,6 +2,6 @@
   "buildCommand": "vite build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/((?!privacy|terms).*)", "destination": "/index.html" }
+    { "source": "/((?!private-policy|terms).*)", "destination": "/index.html" }
   ]
 }

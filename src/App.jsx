@@ -73,7 +73,24 @@ const s = {
   modalInput: { fontFamily: FONT, fontSize: 14, border: "none", borderBottom: "1px solid #999", background: "transparent", outline: "none", padding: "4px 0", width: "100%" },
 };
 
-// Password prompt modal
+function Breadcrumbs({ root, path, setPath, children }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 32, flexWrap: "wrap" }}>
+      <button style={s.crumb} onClick={() => setPath([])}>{root}</button>
+      {path.map((p, i) => (
+        <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: "#ccc", fontSize: 14 }}>/</span>
+          {i < path.length - 1
+            ? <button style={s.crumb} onClick={() => setPath(path.slice(0, i + 1))}>{p}</button>
+            : <span style={s.current}>{p}</span>}
+        </span>
+      ))}
+      <span style={{ flex: 1 }} />
+      {children}
+    </div>
+  );
+}
+
 function PasswordModal({ title, onConfirm, onCancel, error }) {
   const [value, setValue] = useState("");
   const inputRef = useRef();
@@ -279,19 +296,7 @@ function SharedView({ id }) {
 
   return (
     <div style={s.app}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <button style={s.crumb} onClick={() => setPath([])}>{data.name}</button>
-        {path.map((p, i) => (
-          <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ color: "#ccc", fontSize: 14 }}>/</span>
-            {i < path.length - 1
-              ? <button style={s.crumb} onClick={() => setPath(path.slice(0, i + 1))}>{p}</button>
-              : <span style={s.current}>{p}</span>}
-          </span>
-        ))}
-        <span style={{ flex: 1 }} />
-        {badge}
-      </div>
+      <Breadcrumbs root={data.name} path={path} setPath={setPath}>{badge}</Breadcrumbs>
 
       {authBanner}
 
@@ -322,7 +327,6 @@ export default function App() {
   const [newName, setNewName] = useState("");
   const [renaming, setRenaming] = useState(null);
   const [renameTo, setRenameTo] = useState("");
-  const [copied, setCopied] = useState(null);
   const [shareModal, setShareModal] = useState(null); // { name, node }
   const inputRef = useRef();
   const renameRef = useRef();
@@ -331,9 +335,6 @@ export default function App() {
   // Lock state during creation
   const [lockEnabled, setLockEnabled] = useState(false);
   const [lockPassword, setLockPassword] = useState("");
-
-  // Tracks which nodes are unlocked this session: key = path+name joined
-  const [unlockedKeys, setUnlockedKeys] = useState(new Set());
 
   // Password prompt state
   const [promptFor, setPromptFor] = useState(null); // { name, node, action: "open"|"enter" }
@@ -351,18 +352,6 @@ export default function App() {
 
   function update(newTree) { setTree(newTree); save(user.uid, newTree); }
 
-  function nodeKey(nodePath, name) {
-    return [...nodePath, name].join("/");
-  }
-
-  function isUnlocked(name) {
-    return unlockedKeys.has(nodeKey(path, name));
-  }
-
-  function unlock(name) {
-    setUnlockedKeys(prev => new Set([...prev, nodeKey(path, name)]));
-  }
-
   async function handlePromptConfirm(password) {
   if (!promptFor) return;
   const { name, node, action } = promptFor;
@@ -371,7 +360,6 @@ export default function App() {
     setPromptError(true);
     return;
   }
-  // Don't call unlock(name) — just act directly
   setPromptFor(null);
   setPromptError(false);
   if (action === "open") {
@@ -384,7 +372,7 @@ export default function App() {
 }
 
   function handleItemClick(name, node) {
-    if (node.locked && !isUnlocked(name)) {
+    if (node.locked) {
       setPromptFor({ name, node, action: "open" });
       setPromptError(false);
       return;
@@ -503,19 +491,9 @@ export default function App() {
         />
       )}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 32, flexWrap: "wrap" }}>
-        <button style={s.crumb} onClick={() => setPath([])}>notebook</button>
-        {path.map((p, i) => (
-          <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ color: "#ccc", fontSize: 14 }}>/</span>
-            {i < path.length - 1
-              ? <button style={s.crumb} onClick={() => setPath(path.slice(0, i + 1))}>{p}</button>
-              : <span style={s.current}>{p}</span>}
-          </span>
-        ))}
-        <span style={{ flex: 1 }} />
+      <Breadcrumbs root="notebook" path={path} setPath={setPath}>
         <button style={s.crumb} onClick={() => signOut(auth)}>{user.displayName} · sign out</button>
-      </div>
+      </Breadcrumbs>
 
       {items.length === 0 && !creating && (
         <div style={{ color: "#bbb", fontSize: 13, marginBottom: 24 }}>empty — add something below</div>
@@ -531,7 +509,7 @@ export default function App() {
               onBlur={() => rename(name)} />
           ) : (
             <button style={s.name} onClick={() => handleItemClick(name, node)}>
-              {node.locked && !isUnlocked(name) ? "🔒 " : ""}{name}
+              {node.locked ? "🔒 " : ""}{name}
             </button>
           )}
           <button style={s.iconBtn} title="rename" onClick={() => { setRenaming(name); setRenameTo(name); }}>✎</button>
