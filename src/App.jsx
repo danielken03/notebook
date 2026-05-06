@@ -15,8 +15,30 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const FONT = "'Courier New', monospace";
 const defaultTree = { type: "folder", children: {} };
+
+// ─── CSS VARIABLES ────────────────────────────────────────────────────────────
+// Injected once at module load so all inline styles can reference var(--*)
+
+const styleTag = document.createElement("style");
+styleTag.textContent = `
+  :root {
+    --font:    'Courier New', monospace;
+    --bg:      #F0F0F0;
+    --text:    #191919;
+    --body:    #212121;
+    --dim:     #333333;
+    --muted:   #333333;
+    --subtle:  #555555;
+    --pale:    #555555;
+    --faint:   #777777;
+    --border:  #2C2C2C;
+    --line:    #2C2C2C;
+    --overlay: rgba(0,0,0,0.3);
+    --error:   #cc0000;
+  }
+`;
+document.head.appendChild(styleTag);
 
 // ─── UTILITIES ────────────────────────────────────────────────────────────────
 
@@ -61,12 +83,12 @@ const s = {
 
   // layout
   app: {
-    fontFamily: FONT,
+    fontFamily: "var(--font)",
     maxWidth: 680,
     margin: "0 auto",
     padding: "40px 20px",
     minHeight: "100vh",
-    background: "#fafaf8",
+    background: "var(--bg)",
   },
 
   // sign-in screen
@@ -76,8 +98,8 @@ const s = {
     alignItems: "center",
     justifyContent: "center",
     minHeight: "100vh",
-    fontFamily: FONT,
-    background: "#fafaf8",
+    fontFamily: "var(--font)",
+    background: "var(--bg)",
     gap: 16,
   },
 
@@ -86,15 +108,15 @@ const s = {
     background: "none",
     border: "none",
     cursor: "pointer",
-    fontFamily: FONT,
+    fontFamily: "var(--font)",
     fontSize: 14,
-    color: "#888",
+    color: "var(--muted)",
     padding: 0,
     textDecoration: "underline",
   },
   current: {
     fontSize: 14,
-    color: "#222",
+    color: "var(--text)",
   },
 
   // item rows
@@ -102,12 +124,12 @@ const s = {
     display: "flex",
     alignItems: "center",
     padding: "8px 0",
-    borderBottom: "1px solid #eee",
+    borderBottom: "1px solid var(--border)",
     gap: 8,
   },
   icon: {
     width: 18,
-    color: "#aaa",
+    color: "var(--subtle)",
     fontSize: 13,
     flexShrink: 0,
     textAlign: "center",
@@ -117,19 +139,19 @@ const s = {
     background: "none",
     border: "none",
     cursor: "pointer",
-    fontFamily: FONT,
+    fontFamily: "var(--font)",
     fontSize: 14,
     textAlign: "left",
     padding: 0,
-    color: "#222",
+    color: "var(--text)",
   },
   iconBtn: {
     background: "none",
     border: "none",
     cursor: "pointer",
-    color: "#ccc",
+    color: "var(--faint)",
     fontSize: 12,
-    fontFamily: FONT,
+    fontFamily: "var(--font)",
     padding: "0 3px",
   },
 
@@ -141,19 +163,19 @@ const s = {
   },
   btn: {
     background: "none",
-    border: "1px solid #ccc",
+    border: "1px solid var(--faint)",
     borderRadius: 2,
     cursor: "pointer",
-    fontFamily: FONT,
+    fontFamily: "var(--font)",
     fontSize: 13,
     padding: "4px 12px",
-    color: "#555",
+    color: "var(--dim)",
   },
   inlineInput: {
-    fontFamily: FONT,
+    fontFamily: "var(--font)",
     fontSize: 14,
     border: "none",
-    borderBottom: "1px solid #999",
+    borderBottom: "1px solid var(--line)",
     background: "transparent",
     outline: "none",
     width: 200,
@@ -164,7 +186,7 @@ const s = {
   editor: {
     position: "fixed",
     inset: 0,
-    background: "#fafaf8",
+    background: "var(--bg)",
     display: "flex",
     flexDirection: "column",
     padding: "32px 40px",
@@ -172,23 +194,23 @@ const s = {
   },
   textarea: {
     flex: 1,
-    fontFamily: FONT,
+    fontFamily: "var(--font)",
     fontSize: 14,
     border: "none",
     outline: "none",
     background: "transparent",
     resize: "none",
     lineHeight: 1.7,
-    color: "#333",
+    color: "var(--body)",
   },
   back: {
     marginBottom: 24,
     background: "none",
     border: "none",
     cursor: "pointer",
-    fontFamily: FONT,
+    fontFamily: "var(--font)",
     fontSize: 13,
-    color: "#888",
+    color: "var(--muted)",
     padding: 0,
     textDecoration: "underline",
   },
@@ -197,27 +219,27 @@ const s = {
   modal: {
     position: "fixed",
     inset: 0,
-    background: "rgba(0,0,0,0.3)",
+    background: "var(--overlay)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     zIndex: 100,
   },
   modalBox: {
-    background: "#fafaf8",
+    background: "var(--bg)",
     padding: "32px",
-    fontFamily: FONT,
+    fontFamily: "var(--font)",
     display: "flex",
     flexDirection: "column",
     gap: 16,
     minWidth: 280,
-    border: "1px solid #eee",
+    border: "1px solid var(--border)",
   },
   modalInput: {
-    fontFamily: FONT,
+    fontFamily: "var(--font)",
     fontSize: 14,
     border: "none",
-    borderBottom: "1px solid #999",
+    borderBottom: "1px solid var(--line)",
     background: "transparent",
     outline: "none",
     padding: "4px 0",
@@ -233,7 +255,7 @@ function Breadcrumbs({ root, path, setPath, children }) {
       <button style={s.crumb} onClick={() => setPath([])}>{root}</button>
       {path.map((p, i) => (
         <span key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ color: "#ccc", fontSize: 14 }}>/</span>
+          <span style={{ color: "var(--faint)", fontSize: 14 }}>/</span>
           {i < path.length - 1
             ? <button style={s.crumb} onClick={() => setPath(path.slice(0, i + 1))}>{p}</button>
             : <span style={s.current}>{p}</span>}
@@ -252,7 +274,7 @@ function PasswordModal({ title, onConfirm, onCancel, error }) {
   return (
     <div style={s.modal}>
       <div style={s.modalBox}>
-        <div style={{ fontSize: 14, color: "#222" }}>🔒 {title}</div>
+        <div style={{ fontSize: 14, color: "var(--text)" }}>🔒 {title}</div>
         <input
           ref={inputRef}
           style={s.modalInput}
@@ -262,7 +284,7 @@ function PasswordModal({ title, onConfirm, onCancel, error }) {
           onChange={e => setValue(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") onConfirm(value); if (e.key === "Escape") onCancel(); }}
         />
-        {error && <div style={{ fontSize: 12, color: "#c00" }}>incorrect password</div>}
+        {error && <div style={{ fontSize: 12, color: "var(--error)" }}>incorrect password</div>}
         <div style={{ display: "flex", gap: 8 }}>
           <button style={s.btn} onClick={() => onConfirm(value)}>unlock</button>
           <button style={{ ...s.btn, border: "none" }} onClick={onCancel}>cancel</button>
@@ -303,11 +325,11 @@ function ShareModal({ name, onShare, onClose }) {
   return (
     <div style={s.modal}>
       <div style={{ ...s.modalBox, maxWidth: 360, width: "100%" }}>
-        <div style={{ fontSize: 14, color: "#222" }}>share "{name}"</div>
+        <div style={{ fontSize: 14, color: "var(--text)" }}>share "{name}"</div>
 
         {!url ? (
           <>
-            <div style={{ fontSize: 12, color: "#aaa" }}>
+            <div style={{ fontSize: 12, color: "var(--subtle)" }}>
               anyone with the link can view. add emails below to grant edit access.
             </div>
 
@@ -328,11 +350,11 @@ function ShareModal({ name, onShare, onClose }) {
             {/* Editor list */}
             {editors.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ fontSize: 11, color: "#aaa", marginBottom: 2 }}>can edit:</div>
+                <div style={{ fontSize: 11, color: "var(--subtle)", marginBottom: 2 }}>can edit:</div>
                 {editors.map(e => (
-                  <div key={e} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#555" }}>
+                  <div key={e} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--dim)" }}>
                     <span style={{ flex: 1 }}>✏ {e}</span>
-                    <button style={{ ...s.iconBtn, color: "#ccc", fontSize: 11 }} onClick={() => setEditors(prev => prev.filter(x => x !== e))}>✕</button>
+                    <button style={{ ...s.iconBtn, color: "var(--faint)", fontSize: 11 }} onClick={() => setEditors(prev => prev.filter(x => x !== e))}>✕</button>
                   </div>
                 ))}
               </div>
@@ -347,11 +369,11 @@ function ShareModal({ name, onShare, onClose }) {
           </>
         ) : (
           <>
-            <div style={{ fontSize: 12, color: "#aaa" }}>
+            <div style={{ fontSize: 12, color: "var(--subtle)" }}>
               link ready — anyone can view{editors.length > 0 ? `, ${editors.length === 1 ? "1 person" : `${editors.length} people`} can edit` : ""}:
             </div>
             <div style={{
-              fontFamily: FONT, fontSize: 11, color: "#555", background: "#f3f3f0",
+              fontFamily: "var(--font)", fontSize: 11, color: "var(--dim)", background: "#f3f3f0",
               padding: "8px 10px", borderRadius: 2, wordBreak: "break-all", userSelect: "all"
             }}>{url}</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -381,8 +403,8 @@ function SharedView({ id }) {
   useEffect(() => { loadShare(id).then(d => setData(d || false)); }, [id]);
   useEffect(() => onAuthStateChanged(auth, u => setViewer(u || null)), []);
 
-  if (data === null || viewer === undefined) return <div style={{ ...s.signIn, color: "#aaa" }}>loading…</div>;
-  if (data === false) return <div style={{ ...s.signIn, color: "#aaa" }}>link not found</div>;
+  if (data === null || viewer === undefined) return <div style={{ ...s.signIn, color: "var(--subtle)" }}>loading…</div>;
+  if (data === false) return <div style={{ ...s.signIn, color: "var(--subtle)" }}>link not found</div>;
 
   const root = data.tree;
   const viewerEmail = viewer?.email?.toLowerCase() || null;
@@ -391,8 +413,8 @@ function SharedView({ id }) {
   const wrongAccount = editorsExist && viewer && !canEdit;
 
   const badge = canEdit
-    ? <span style={{ fontSize: 12, color: "#888" }}>shared · you can edit</span>
-    : <span style={{ fontSize: 12, color: "#bbb" }}>shared · read only</span>;
+    ? <span style={{ fontSize: 12, color: "var(--muted)" }}>shared · you can edit</span>
+    : <span style={{ fontSize: 12, color: "var(--pale)" }}>shared · read only</span>;
 
   // Prominent auth banner shown when edit access exists but viewer can't edit
   const authBanner = editorsExist && !canEdit && (
@@ -403,14 +425,14 @@ function SharedView({ id }) {
     }}>
       {!viewer ? (
         <>
-          <span style={{ fontSize: 13, color: "#555", flex: 1 }}>this link has edit access for certain accounts</span>
+          <span style={{ fontSize: 13, color: "var(--dim)", flex: 1 }}>this link has edit access for certain accounts</span>
           <button style={s.btn} onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}>
             sign in with google
           </button>
         </>
       ) : wrongAccount ? (
         <>
-          <span style={{ fontSize: 13, color: "#555", flex: 1 }}>
+          <span style={{ fontSize: 13, color: "var(--dim)", flex: 1 }}>
             signed in as <strong>{viewer.email}</strong> · not on the edit list
           </span>
           <button style={s.btn} onClick={() => signOut(auth)}>switch account</button>
@@ -437,10 +459,10 @@ function SharedView({ id }) {
       <div style={s.editor}>
         {openPage && <button style={s.back} onClick={() => setOpenPage(null)}>← back</button>}
         {authBanner}
-        <div style={{ fontSize: 18, marginBottom: 12, color: "#222" }}>{name}</div>
+        <div style={{ fontSize: 18, marginBottom: 12, color: "var(--text)" }}>{name}</div>
         {canEdit
           ? <textarea style={s.textarea} defaultValue={content} placeholder="Start writing…" onBlur={e => savePageContent(e.target.value)} autoFocus />
-          : <div style={{ ...s.textarea, whiteSpace: "pre-wrap", overflow: "auto" }}>{content || <span style={{ color: "#bbb" }}>empty page</span>}</div>
+          : <div style={{ ...s.textarea, whiteSpace: "pre-wrap", overflow: "auto" }}>{content || <span style={{ color: "var(--pale)" }}>empty page</span>}</div>
         }
         <div style={{ marginTop: 16 }}>{badge}</div>
       </div>
@@ -470,7 +492,7 @@ function SharedView({ id }) {
           }>{name}</button>
         </div>
       ))}
-      {items.length === 0 && <div style={{ color: "#bbb", fontSize: 13 }}>empty</div>}
+      {items.length === 0 && <div style={{ color: "var(--pale)", fontSize: 13 }}>empty</div>}
     </div>
   );
 }
@@ -630,15 +652,15 @@ export default function App() {
   }
 
   // ── Loading / sign-in screens ──
-  if (user === undefined) return <div style={{ ...s.signIn, color: "#aaa" }}>loading…</div>;
+  if (user === undefined) return <div style={{ ...s.signIn, color: "var(--subtle)" }}>loading…</div>;
   if (!user) return (
     <div style={s.signIn}>
-      <div style={{ fontSize: 18, color: "#222" }}>notebook</div>
+      <div style={{ fontSize: 18, color: "var(--text)" }}>notebook</div>
       <button style={s.btn} onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}>sign in with google</button>
-      <a href="/private-policy.html" style={{ fontSize: 12, color: "#aaa", marginTop: 24, textDecoration: "underline", fontFamily: FONT }}>privacy policy</a>
+      <a href="/private-policy.html" style={{ fontSize: 12, color: "var(--subtle)", marginTop: 24, textDecoration: "underline", fontFamily: "var(--font)" }}>privacy policy</a>
     </div>
   );
-  if (!tree) return <div style={{ ...s.signIn, color: "#aaa" }}>loading…</div>;
+  if (!tree) return <div style={{ ...s.signIn, color: "var(--subtle)" }}>loading…</div>;
 
   const folder = getNode(tree, path);
   const items = Object.entries(folder.children).sort(([,a],[,b]) =>
@@ -649,7 +671,7 @@ export default function App() {
   if (openPage) return (
     <div style={s.editor}>
       <button style={s.back} onClick={() => setOpenPage(null)}>← back</button>
-      <div style={{ fontSize: 18, marginBottom: 16, color: "#222" }}>{openPage.name}</div>
+      <div style={{ fontSize: 18, marginBottom: 16, color: "var(--text)" }}>{openPage.name}</div>
       <textarea style={s.textarea} defaultValue={openPage.content} placeholder="Start writing…" onBlur={e => savePage(e.target.value)} autoFocus />
     </div>
   );
@@ -682,7 +704,7 @@ export default function App() {
 
       {/* Items list */}
       {items.length === 0 && !creating && (
-        <div style={{ color: "#bbb", fontSize: 13, marginBottom: 24 }}>empty — add something below</div>
+        <div style={{ color: "var(--pale)", fontSize: 13, marginBottom: 24 }}>empty — add something below</div>
       )}
       {items.map(([name, node]) => (
         <div key={name} style={s.row}>
@@ -705,14 +727,14 @@ export default function App() {
 
       {/* Create row */}
       {creating && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 0", borderBottom: "1px solid #eee" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={s.icon}>{creating === "folder" ? "▶" : "·"}</span>
             <input ref={inputRef} style={s.inlineInput} value={newName} onChange={e => setNewName(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter" && !lockEnabled) create(); if (e.key === "Escape") cancelCreate(); }}
               placeholder={`${creating} name…`} />
             <button
-              style={{ ...s.iconBtn, color: lockEnabled ? "#555" : "#ccc", fontSize: 14 }}
+              style={{ ...s.iconBtn, color: lockEnabled ? "var(--dim)" : "var(--faint)", fontSize: 14 }}
               title={lockEnabled ? "remove lock" : "add lock"}
               onClick={() => { setLockEnabled(v => !v); setLockPassword(""); }}
             >🔒</button>
@@ -721,7 +743,7 @@ export default function App() {
           </div>
           {lockEnabled && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 26 }}>
-              <span style={{ fontSize: 12, color: "#aaa" }}>password:</span>
+              <span style={{ fontSize: 12, color: "var(--subtle)" }}>password:</span>
               <input
                 ref={lockPasswordRef}
                 style={{ ...s.inlineInput, width: 160 }}
