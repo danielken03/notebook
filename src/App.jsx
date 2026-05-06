@@ -18,6 +18,8 @@ const db = getFirestore(app);
 const FONT = "'Courier New', monospace";
 const defaultTree = { type: "folder", children: {} };
 
+// ─── UTILITIES ────────────────────────────────────────────────────────────────
+
 async function hashPassword(password) {
   const encoder = new TextEncoder();
   const data = encoder.encode(password);
@@ -53,25 +55,177 @@ function getNode(tree, path) {
   return node;
 }
 
+// ─── STYLES ───────────────────────────────────────────────────────────────────
+
 const s = {
-  app: { fontFamily: FONT, maxWidth: 680, margin: "0 auto", padding: "40px 20px", minHeight: "100vh", background: "#fafaf8" },
-  crumb: { background: "none", border: "none", cursor: "pointer", fontFamily: FONT, fontSize: 14, color: "#888", padding: 0, textDecoration: "underline" },
-  current: { fontSize: 14, color: "#222" },
-  row: { display: "flex", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #eee", gap: 8 },
-  icon: { width: 18, color: "#aaa", fontSize: 13, flexShrink: 0, textAlign: "center" },
-  name: { flex: 1, background: "none", border: "none", cursor: "pointer", fontFamily: FONT, fontSize: 14, textAlign: "left", padding: 0, color: "#222" },
-  iconBtn: { background: "none", border: "none", cursor: "pointer", color: "#ccc", fontSize: 12, fontFamily: FONT, padding: "0 3px" },
-  toolbar: { display: "flex", gap: 12, marginTop: 24 },
-  btn: { background: "none", border: "1px solid #ccc", borderRadius: 2, cursor: "pointer", fontFamily: FONT, fontSize: 13, padding: "4px 12px", color: "#555" },
-  inlineInput: { fontFamily: FONT, fontSize: 14, border: "none", borderBottom: "1px solid #999", background: "transparent", outline: "none", width: 200, padding: "2px 0" },
-  editor: { position: "fixed", inset: 0, background: "#fafaf8", display: "flex", flexDirection: "column", padding: "32px 40px", zIndex: 10 },
-  textarea: { flex: 1, fontFamily: FONT, fontSize: 14, border: "none", outline: "none", background: "transparent", resize: "none", lineHeight: 1.7, color: "#333" },
-  back: { marginBottom: 24, background: "none", border: "none", cursor: "pointer", fontFamily: FONT, fontSize: 13, color: "#888", padding: 0, textDecoration: "underline" },
-  signIn: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", fontFamily: FONT, background: "#fafaf8", gap: 16 },
-  modal: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 },
-  modalBox: { background: "#fafaf8", padding: "32px", fontFamily: FONT, display: "flex", flexDirection: "column", gap: 16, minWidth: 280, border: "1px solid #eee" },
-  modalInput: { fontFamily: FONT, fontSize: 14, border: "none", borderBottom: "1px solid #999", background: "transparent", outline: "none", padding: "4px 0", width: "100%" },
+
+  // layout
+  app: {
+    fontFamily: FONT,
+    maxWidth: 680,
+    margin: "0 auto",
+    padding: "40px 20px",
+    minHeight: "100vh",
+    background: "#fafaf8",
+  },
+
+  // sign-in screen
+  signIn: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: "100vh",
+    fontFamily: FONT,
+    background: "#fafaf8",
+    gap: 16,
+  },
+
+  // breadcrumb nav
+  crumb: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    fontFamily: FONT,
+    fontSize: 14,
+    color: "#888",
+    padding: 0,
+    textDecoration: "underline",
+  },
+  current: {
+    fontSize: 14,
+    color: "#222",
+  },
+
+  // item rows
+  row: {
+    display: "flex",
+    alignItems: "center",
+    padding: "8px 0",
+    borderBottom: "1px solid #eee",
+    gap: 8,
+  },
+  icon: {
+    width: 18,
+    color: "#aaa",
+    fontSize: 13,
+    flexShrink: 0,
+    textAlign: "center",
+  },
+  name: {
+    flex: 1,
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    fontFamily: FONT,
+    fontSize: 14,
+    textAlign: "left",
+    padding: 0,
+    color: "#222",
+  },
+  iconBtn: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    color: "#ccc",
+    fontSize: 12,
+    fontFamily: FONT,
+    padding: "0 3px",
+  },
+
+  // toolbar & buttons
+  toolbar: {
+    display: "flex",
+    gap: 12,
+    marginTop: 24,
+  },
+  btn: {
+    background: "none",
+    border: "1px solid #ccc",
+    borderRadius: 2,
+    cursor: "pointer",
+    fontFamily: FONT,
+    fontSize: 13,
+    padding: "4px 12px",
+    color: "#555",
+  },
+  inlineInput: {
+    fontFamily: FONT,
+    fontSize: 14,
+    border: "none",
+    borderBottom: "1px solid #999",
+    background: "transparent",
+    outline: "none",
+    width: 200,
+    padding: "2px 0",
+  },
+
+  // page editor
+  editor: {
+    position: "fixed",
+    inset: 0,
+    background: "#fafaf8",
+    display: "flex",
+    flexDirection: "column",
+    padding: "32px 40px",
+    zIndex: 10,
+  },
+  textarea: {
+    flex: 1,
+    fontFamily: FONT,
+    fontSize: 14,
+    border: "none",
+    outline: "none",
+    background: "transparent",
+    resize: "none",
+    lineHeight: 1.7,
+    color: "#333",
+  },
+  back: {
+    marginBottom: 24,
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    fontFamily: FONT,
+    fontSize: 13,
+    color: "#888",
+    padding: 0,
+    textDecoration: "underline",
+  },
+
+  // modals
+  modal: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.3)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 100,
+  },
+  modalBox: {
+    background: "#fafaf8",
+    padding: "32px",
+    fontFamily: FONT,
+    display: "flex",
+    flexDirection: "column",
+    gap: 16,
+    minWidth: 280,
+    border: "1px solid #eee",
+  },
+  modalInput: {
+    fontFamily: FONT,
+    fontSize: 14,
+    border: "none",
+    borderBottom: "1px solid #999",
+    background: "transparent",
+    outline: "none",
+    padding: "4px 0",
+    width: "100%",
+  },
 };
+
+// ─── COMPONENTS ───────────────────────────────────────────────────────────────
 
 function Breadcrumbs({ root, path, setPath, children }) {
   return (
@@ -216,6 +370,8 @@ function ShareModal({ name, onShare, onClose }) {
   );
 }
 
+// ─── SHARED VIEW ──────────────────────────────────────────────────────────────
+
 function SharedView({ id }) {
   const [data, setData] = useState(null);
   const [path, setPath] = useState([]);
@@ -263,6 +419,7 @@ function SharedView({ id }) {
     </div>
   );
 
+  // Save an edited page back to Firestore
   async function savePageContent(content) {
     const newTree = JSON.parse(JSON.stringify(root));
     const node = openPage.nodePath.reduce((n, p) => n.children[p], newTree);
@@ -272,6 +429,7 @@ function SharedView({ id }) {
     await saveSharedTree(id, newTree);
   }
 
+  // ── Page editor view ──
   if (root.type === "page" || openPage) {
     const content = openPage ? openPage.content : root.content;
     const name = openPage ? openPage.name : data.name;
@@ -289,6 +447,7 @@ function SharedView({ id }) {
     );
   }
 
+  // ── Folder view ──
   const folder = getNode(root, path);
   const items = Object.entries(folder.children).sort(([,a],[,b]) =>
     a.type === b.type ? 0 : a.type === "folder" ? -1 : 1
@@ -300,6 +459,7 @@ function SharedView({ id }) {
 
       {authBanner}
 
+      {/* Items list */}
       {items.map(([name, node]) => (
         <div key={name} style={s.row}>
           <span style={s.icon}>{node.type === "folder" ? "▶" : "·"}</span>
@@ -315,62 +475,76 @@ function SharedView({ id }) {
   );
 }
 
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+
 export default function App() {
   const shareMatch = window.location.hash.match(/^#share\/(.+)/);
   if (shareMatch) return <SharedView id={shareMatch[1]} />;
 
+  // Navigation & content state
   const [user, setUser] = useState(undefined);
   const [tree, setTree] = useState(null);
   const [path, setPath] = useState([]);
   const [openPage, setOpenPage] = useState(null);
+
+  // Create / rename state
   const [creating, setCreating] = useState(null);
   const [newName, setNewName] = useState("");
   const [renaming, setRenaming] = useState(null);
   const [renameTo, setRenameTo] = useState("");
+
+  // Lock state (during item creation)
+  const [lockEnabled, setLockEnabled] = useState(false);
+  const [lockPassword, setLockPassword] = useState("");
+
+  // Password prompt state (when opening a locked item)
+  const [promptFor, setPromptFor] = useState(null); // { name, node, action: "open"|"enter" }
+  const [promptError, setPromptError] = useState(false);
+
+  // Share modal state
   const [shareModal, setShareModal] = useState(null); // { name, node }
+
+  // Refs for auto-focusing inputs
   const inputRef = useRef();
   const renameRef = useRef();
   const lockPasswordRef = useRef();
 
-  // Lock state during creation
-  const [lockEnabled, setLockEnabled] = useState(false);
-  const [lockPassword, setLockPassword] = useState("");
-
-  // Password prompt state
-  const [promptFor, setPromptFor] = useState(null); // { name, node, action: "open"|"enter" }
-  const [promptError, setPromptError] = useState(false);
-
+  // Auto-focus inputs when their state activates
   useEffect(() => { if (creating && inputRef.current) inputRef.current.focus(); }, [creating]);
   useEffect(() => { if (renaming && renameRef.current) renameRef.current.focus(); }, [renaming]);
   useEffect(() => { if (lockEnabled && lockPasswordRef.current) lockPasswordRef.current.focus(); }, [lockEnabled]);
 
+  // Load the user's tree from Firestore on sign-in
   useEffect(() => onAuthStateChanged(auth, async (u) => {
     setUser(u);
     if (u) setTree(await load(u.uid));
     else setTree(null);
   }), []);
 
+  // Save tree to Firestore and update local state
   function update(newTree) { setTree(newTree); save(user.uid, newTree); }
 
+  // Verify password then open the locked item
   async function handlePromptConfirm(password) {
-  if (!promptFor) return;
-  const { name, node, action } = promptFor;
-  const hash = await hashPassword(password);
-  if (hash !== node.passwordHash) {
-    setPromptError(true);
-    return;
-  }
-  setPromptFor(null);
-  setPromptError(false);
-  if (action === "open") {
-    if (node.type === "folder") {
-      setPath([...path, name]);
-    } else {
-      setOpenPage({ name, content: node.content });
+    if (!promptFor) return;
+    const { name, node, action } = promptFor;
+    const hash = await hashPassword(password);
+    if (hash !== node.passwordHash) {
+      setPromptError(true);
+      return;
+    }
+    setPromptFor(null);
+    setPromptError(false);
+    if (action === "open") {
+      if (node.type === "folder") {
+        setPath([...path, name]);
+      } else {
+        setOpenPage({ name, content: node.content });
+      }
     }
   }
-}
 
+  // Open item — prompt for password if locked, otherwise navigate directly
   function handleItemClick(name, node) {
     if (node.locked) {
       setPromptFor({ name, node, action: "open" });
@@ -381,6 +555,7 @@ export default function App() {
     else setOpenPage({ name, content: node.content });
   }
 
+  // Create a new page or folder (with optional password lock)
   async function create() {
     const name = newName.trim();
     if (!name || folder.children[name]) return;
@@ -404,6 +579,7 @@ export default function App() {
     setLockPassword("");
   }
 
+  // Cancel the create form and reset its state
   function cancelCreate() {
     setCreating(null);
     setNewName("");
@@ -411,6 +587,7 @@ export default function App() {
     setLockPassword("");
   }
 
+  // Delete an item (with confirmation)
   function deleteItem(name) {
     if (!confirm(`Delete "${name}"?`)) return;
     const newTree = JSON.parse(JSON.stringify(tree));
@@ -419,6 +596,7 @@ export default function App() {
     if (openPage?.name === name) setOpenPage(null);
   }
 
+  // Rename an item inline
   function rename(oldName) {
     const n = renameTo.trim();
     if (!n || n === oldName || folder.children[n]) { setRenaming(null); return; }
@@ -431,16 +609,19 @@ export default function App() {
     if (openPage?.name === oldName) setOpenPage({ ...openPage, name: n });
   }
 
+  // Open the share modal for an item
   function openShare(name, node) {
     setShareModal({ name, node });
   }
 
+  // Create a share link and return its URL
   async function doShare(allowedEditors) {
     const { name, node } = shareModal;
     const id = await createShare(node, name, allowedEditors);
     return `${window.location.origin}/#share/${id}`;
   }
 
+  // Save page content back into the tree
   function savePage(content) {
     const newTree = JSON.parse(JSON.stringify(tree));
     getNode(newTree, [...path, openPage.name]).content = content;
@@ -448,6 +629,7 @@ export default function App() {
     setOpenPage({ ...openPage, content });
   }
 
+  // ── Loading / sign-in screens ──
   if (user === undefined) return <div style={{ ...s.signIn, color: "#aaa" }}>loading…</div>;
   if (!user) return (
     <div style={s.signIn}>
@@ -463,6 +645,7 @@ export default function App() {
     a.type === b.type ? 0 : a.type === "folder" ? -1 : 1
   );
 
+  // ── Page editor view ──
   if (openPage) return (
     <div style={s.editor}>
       <button style={s.back} onClick={() => setOpenPage(null)}>← back</button>
@@ -471,8 +654,11 @@ export default function App() {
     </div>
   );
 
+  // ── Main folder view ──
   return (
     <div style={s.app}>
+
+      {/* Modals */}
       {shareModal && (
         <ShareModal
           name={shareModal.name}
@@ -480,8 +666,6 @@ export default function App() {
           onClose={() => setShareModal(null)}
         />
       )}
-
-      {/* Password prompt modal */}
       {promptFor && (
         <PasswordModal
           title={`"${promptFor.name}" is locked`}
@@ -491,14 +675,15 @@ export default function App() {
         />
       )}
 
+      {/* Breadcrumb nav */}
       <Breadcrumbs root="notebook" path={path} setPath={setPath}>
         <button style={s.crumb} onClick={() => signOut(auth)}>{user.displayName} · sign out</button>
       </Breadcrumbs>
 
+      {/* Items list */}
       {items.length === 0 && !creating && (
         <div style={{ color: "#bbb", fontSize: 13, marginBottom: 24 }}>empty — add something below</div>
       )}
-
       {items.map(([name, node]) => (
         <div key={name} style={s.row}>
           <span style={s.icon}>{node.type === "folder" ? "▶" : "·"}</span>
@@ -518,6 +703,7 @@ export default function App() {
         </div>
       ))}
 
+      {/* Create row */}
       {creating && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 0", borderBottom: "1px solid #eee" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -525,7 +711,6 @@ export default function App() {
             <input ref={inputRef} style={s.inlineInput} value={newName} onChange={e => setNewName(e.target.value)}
               onKeyDown={e => { if (e.key === "Enter" && !lockEnabled) create(); if (e.key === "Escape") cancelCreate(); }}
               placeholder={`${creating} name…`} />
-            {/* Lock toggle button */}
             <button
               style={{ ...s.iconBtn, color: lockEnabled ? "#555" : "#ccc", fontSize: 14 }}
               title={lockEnabled ? "remove lock" : "add lock"}
@@ -551,10 +736,12 @@ export default function App() {
         </div>
       )}
 
+      {/* Toolbar */}
       <div style={s.toolbar}>
         <button style={s.btn} onClick={() => { setCreating("page"); setNewName(""); }}>+ page</button>
         <button style={s.btn} onClick={() => { setCreating("folder"); setNewName(""); }}>+ folder</button>
       </div>
+
     </div>
   );
 }
