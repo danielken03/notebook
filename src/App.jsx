@@ -34,11 +34,41 @@ styleTag.textContent = `
     --faint:   #777777;
     --border:  #2C2C2C;
     --line:    #2C2C2C;
+    --surface: #f3f3f0;
     --overlay: rgba(0,0,0,0.3);
     --error:   #cc0000;
   }
+  :root.dark {
+    --bg:      #191919;
+    --text:    #F0F0F0;
+    --body:    #E0E0E0;
+    --dim:     #CCCCCC;
+    --muted:   #CCCCCC;
+    --subtle:  #AAAAAA;
+    --pale:    #AAAAAA;
+    --faint:   #888888;
+    --border:  #3C3C3C;
+    --line:    #3C3C3C;
+    --surface: #242424;
+    --overlay: rgba(0,0,0,0.6);
+    --error:   #ff5555;
+  }
+  body { background: var(--bg); }
 `;
 document.head.appendChild(styleTag);
+
+// ─── DARK MODE ────────────────────────────────────────────────────────────────
+
+function applyTheme(dark) {
+  document.documentElement.classList.toggle("dark", dark);
+}
+
+applyTheme(localStorage.getItem("dark") === "true");
+
+function toggleDark() {
+  const dark = document.documentElement.classList.toggle("dark");
+  localStorage.setItem("dark", dark);
+}
 
 // ─── UTILITIES ────────────────────────────────────────────────────────────────
 
@@ -180,6 +210,7 @@ const s = {
     outline: "none",
     width: 200,
     padding: "2px 0",
+    color: "var(--text)",
   },
 
   // page editor
@@ -244,10 +275,20 @@ const s = {
     outline: "none",
     padding: "4px 0",
     width: "100%",
+    color: "var(--text)",
   },
 };
 
 // ─── COMPONENTS ───────────────────────────────────────────────────────────────
+
+function DarkToggle() {
+  const [dark, setDark] = useState(document.documentElement.classList.contains("dark"));
+  return (
+    <button style={s.iconBtn} title="toggle theme" onClick={() => { toggleDark(); setDark(d => !d); }}>
+      {dark ? "☀" : "🌙"}
+    </button>
+  );
+}
 
 function Breadcrumbs({ root, path, setPath, children }) {
   return (
@@ -373,7 +414,7 @@ function ShareModal({ name, onShare, onClose }) {
               link ready — anyone can view{editors.length > 0 ? `, ${editors.length === 1 ? "1 person" : `${editors.length} people`} can edit` : ""}:
             </div>
             <div style={{
-              fontFamily: "var(--font)", fontSize: 11, color: "var(--dim)", background: "#f3f3f0",
+              fontFamily: "var(--font)", fontSize: 11, color: "var(--dim)", background: "var(--surface)",
               padding: "8px 10px", borderRadius: 2, wordBreak: "break-all", userSelect: "all"
             }}>{url}</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -419,7 +460,7 @@ function SharedView({ id }) {
   // Prominent auth banner shown when edit access exists but viewer can't edit
   const authBanner = editorsExist && !canEdit && (
     <div style={{
-      background: "#f5f5f0", border: "1px solid #e8e8e0", borderRadius: 2,
+      background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2,
       padding: "12px 16px", marginBottom: 24, display: "flex",
       alignItems: "center", gap: 12, flexWrap: "wrap"
     }}>
@@ -457,7 +498,11 @@ function SharedView({ id }) {
     const name = openPage ? openPage.name : data.name;
     return (
       <div style={s.editor}>
-        {openPage && <button style={s.back} onClick={() => setOpenPage(null)}>← back</button>}
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 24, gap: 12 }}>
+          {openPage && <button style={{ ...s.back, marginBottom: 0 }} onClick={() => setOpenPage(null)}>← back</button>}
+          <span style={{ flex: 1 }} />
+          <DarkToggle />
+        </div>
         {authBanner}
         <div style={{ fontSize: 18, marginBottom: 12, color: "var(--text)" }}>{name}</div>
         {canEdit
@@ -477,7 +522,10 @@ function SharedView({ id }) {
 
   return (
     <div style={s.app}>
-      <Breadcrumbs root={data.name} path={path} setPath={setPath}>{badge}</Breadcrumbs>
+      <Breadcrumbs root={data.name} path={path} setPath={setPath}>
+        <DarkToggle />
+        {badge}
+      </Breadcrumbs>
 
       {authBanner}
 
@@ -670,7 +718,11 @@ export default function App() {
   // ── Page editor view ──
   if (openPage) return (
     <div style={s.editor}>
-      <button style={s.back} onClick={() => setOpenPage(null)}>← back</button>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 24, gap: 12 }}>
+        <button style={{ ...s.back, marginBottom: 0 }} onClick={() => setOpenPage(null)}>← back</button>
+        <span style={{ flex: 1 }} />
+        <DarkToggle />
+      </div>
       <div style={{ fontSize: 18, marginBottom: 16, color: "var(--text)" }}>{openPage.name}</div>
       <textarea style={s.textarea} defaultValue={openPage.content} placeholder="Start writing…" onBlur={e => savePage(e.target.value)} autoFocus />
     </div>
@@ -699,6 +751,7 @@ export default function App() {
 
       {/* Breadcrumb nav */}
       <Breadcrumbs root="notebook" path={path} setPath={setPath}>
+        <DarkToggle />
         <button style={s.crumb} onClick={() => signOut(auth)}>{user.displayName} · sign out</button>
       </Breadcrumbs>
 
