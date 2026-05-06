@@ -285,7 +285,7 @@ function DarkToggle() {
   const [dark, setDark] = useState(document.documentElement.classList.contains("dark"));
   return (
     <button style={s.iconBtn} title="toggle theme" onClick={() => { toggleDark(); setDark(d => !d); }}>
-      {dark ? "☀" : "🌙"}
+      {dark ? "○" : "●"}
     </button>
   );
 }
