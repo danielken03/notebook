@@ -24,7 +24,7 @@ const styleTag = document.createElement("style");
 styleTag.textContent = `
   :root {
     --font:    'Courier New', monospace;
-    --bg:      #F0F0F0;
+    --bg:      #FFFFFF;
     --text:    #191919;
     --body:    #212121;
     --dim:     #333333;
