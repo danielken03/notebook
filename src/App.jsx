@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyA1nVimSTwFWvAPbMQ3ZT7RIrrHZyvUQIo",
@@ -86,10 +86,31 @@ async function load(uid) {
   const snap = await getDoc(doc(db, "notebooks", uid));
   return snap.exists() ? JSON.parse(snap.data().tree) : defaultTree;
 }
-async function createShare(subtree, name, allowedEditors = []) {
+
+function getNode(tree, path) {
+  let node = tree;
+  for (const p of path) node = node.children[p];
+  return node;
+}
+
+// Like getNode, but returns null instead of throwing if the path no longer exists
+// (a share can be edited/deleted remotely while we're looking at it)
+function getNodeSafe(tree, path) {
+  try { return getNode(tree, path) || null; } catch { return null; }
+}
+
+// ─── SHARING ──────────────────────────────────────────────────────────────────
+// The share doc is the single live copy of a shared subtree:
+//   shared/{id} = { ownerUid, name, tree, allowedEditors }
+// The owner's node keeps a `sharedId` marker. The owner pushes to the share doc
+// on every save and pulls remote edits back in (on load + live while open).
+
+async function createShare(uid, node, name) {
   const id = Math.random().toString(36).slice(2, 12);
-  const normalized = allowedEditors.map(e => e.trim().toLowerCase()).filter(Boolean);
-  await setDoc(doc(db, "shared", id), { tree: JSON.stringify(subtree), name, allowedEditors: normalized });
+  const subtree = { ...node, sharedId: id };
+  await setDoc(doc(db, "shared", id), {
+    ownerUid: uid, name, tree: JSON.stringify(subtree), allowedEditors: [],
+  });
   return id;
 }
 async function loadShare(id) {
@@ -101,10 +122,49 @@ async function loadShare(id) {
 async function saveSharedTree(id, subtree) {
   await setDoc(doc(db, "shared", id), { tree: JSON.stringify(subtree) }, { merge: true });
 }
-function getNode(tree, path) {
-  let node = tree;
-  for (const p of path) node = node.children[p];
-  return node;
+async function saveShareEditors(id, allowedEditors) {
+  await setDoc(doc(db, "shared", id), { allowedEditors }, { merge: true });
+}
+async function deleteShare(id) {
+  await deleteDoc(doc(db, "shared", id));
+}
+
+// Walk a tree and collect every shared node with its path
+function findShared(node, path = [], out = []) {
+  if (node.sharedId) out.push({ path, node });
+  if (node.children) {
+    for (const [name, child] of Object.entries(node.children)) findShared(child, [...path, name], out);
+  }
+  return out;
+}
+
+// Pull each share doc's tree into the owner's tree (share doc is authoritative,
+// since editors may have made changes while the owner was away). Saves if changed.
+async function syncShares(uid, tree) {
+  const shares = findShared(tree);
+  if (shares.length === 0) return tree;
+  const newTree = JSON.parse(JSON.stringify(tree));
+  let changed = false;
+  for (const { path } of shares) {
+    const node = getNodeSafe(newTree, path);
+    if (!node?.sharedId) continue;
+    const snap = await getDoc(doc(db, "shared", node.sharedId));
+    if (!snap.exists()) {
+      // Share was deleted elsewhere — drop the marker
+      delete node.sharedId;
+      changed = true;
+      continue;
+    }
+    const remote = JSON.parse(snap.data().tree);
+    remote.sharedId = node.sharedId;
+    if (JSON.stringify(remote) !== JSON.stringify(node)) {
+      const parent = getNode(newTree, path.slice(0, -1));
+      parent.children[path[path.length - 1]] = remote;
+      changed = true;
+    }
+  }
+  if (changed) await save(uid, newTree);
+  return newTree;
 }
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
@@ -335,32 +395,48 @@ function PasswordModal({ title, onConfirm, onCancel, error }) {
   );
 }
 
-function ShareModal({ name, onShare, onClose }) {
-  const [url, setUrl] = useState(null);
+// Share modal — creates a link for unshared items, manages an existing share
+// (copy link, add/remove editors, stop sharing) for shared ones.
+function ShareModal({ name, node, onCreate, onSetEditors, onUnshare, onClose }) {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [emailInput, setEmailInput] = useState("");
-  const [editors, setEditors] = useState([]);
+  const [editors, setEditors] = useState(null); // null = loading from share doc
   const emailRef = useRef();
 
-  function addEmail() {
+  const url = node.sharedId ? `${window.location.origin}/#share/${node.sharedId}` : null;
+
+  // Load the current editor list when managing an existing share
+  useEffect(() => {
+    if (node.sharedId) loadShare(node.sharedId).then(d => setEditors(d?.allowedEditors || []));
+  }, [node.sharedId]);
+
+  async function create() {
+    setLoading(true);
+    await onCreate();
+    setLoading(false);
+  }
+
+  async function addEmail() {
     const e = emailInput.trim().toLowerCase();
-    if (!e || editors.includes(e)) { setEmailInput(""); return; }
-    setEditors(prev => [...prev, e]);
     setEmailInput("");
+    if (!e || !e.includes("@") || editors.includes(e)) return;
+    const next = [...editors, e];
+    setEditors(next);
+    await onSetEditors(next);
     if (emailRef.current) emailRef.current.focus();
   }
 
-  async function handleShare() {
-    setLoading(true);
-    // Include any email still typed in the input but not yet added
-    const pending = emailInput.trim().toLowerCase();
-    const finalEditors = pending && !editors.includes(pending) ? [...editors, pending] : editors;
-    const shareUrl = await onShare(finalEditors);
-    setUrl(shareUrl);
-    setLoading(false);
-    await navigator.clipboard.writeText(shareUrl).catch(() => {});
-    setCopied(true);
+  async function removeEmail(email) {
+    const next = editors.filter(x => x !== email);
+    setEditors(next);
+    await onSetEditors(next);
+  }
+
+  async function stopSharing() {
+    if (!confirm(`Stop sharing "${name}"? The link will stop working.`)) return;
+    await onUnshare();
+    onClose();
   }
 
   return (
@@ -368,41 +444,13 @@ function ShareModal({ name, onShare, onClose }) {
       <div style={{ ...s.modalBox, maxWidth: 360, width: "100%" }}>
         <div style={{ fontSize: 14, color: "var(--text)" }}>share "{name}"</div>
 
-        {!url ? (
+        {!node.sharedId ? (
           <>
             <div style={{ fontSize: 12, color: "var(--subtle)" }}>
-              anyone with the link can view. add emails below to grant edit access.
+              anyone with the link can view a live version. only people you add by email can edit.
             </div>
-
-            {/* Email input */}
-            <div style={{ display: "flex", gap: 6 }}>
-              <input
-                ref={emailRef}
-                style={{ ...s.modalInput, flex: 1 }}
-                type="email"
-                placeholder="editor email address…"
-                value={emailInput}
-                onChange={e => setEmailInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addEmail(); } if (e.key === "Escape") onClose(); }}
-              />
-              <button style={s.btn} onClick={addEmail}>add</button>
-            </div>
-
-            {/* Editor list */}
-            {editors.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ fontSize: 11, color: "var(--subtle)", marginBottom: 2 }}>can edit:</div>
-                {editors.map(e => (
-                  <div key={e} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--dim)" }}>
-                    <span style={{ flex: 1 }}>✏ {e}</span>
-                    <button style={{ ...s.iconBtn, color: "var(--faint)", fontSize: 11 }} onClick={() => setEditors(prev => prev.filter(x => x !== e))}>✕</button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-              <button style={{ ...s.btn, flex: 1 }} disabled={loading} onClick={handleShare}>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={{ ...s.btn, flex: 1 }} disabled={loading} onClick={create}>
                 {loading ? "…" : "create link"}
               </button>
               <button style={{ ...s.btn, border: "none" }} onClick={onClose}>cancel</button>
@@ -410,20 +458,52 @@ function ShareModal({ name, onShare, onClose }) {
           </>
         ) : (
           <>
-            <div style={{ fontSize: 12, color: "var(--subtle)" }}>
-              link ready — anyone can view{editors.length > 0 ? `, ${editors.length === 1 ? "1 person" : `${editors.length} people`} can edit` : ""}:
-            </div>
+            {/* Link */}
+            <div style={{ fontSize: 12, color: "var(--subtle)" }}>anyone with the link can view:</div>
             <div style={{
               fontFamily: "var(--font)", fontSize: 11, color: "var(--dim)", background: "var(--surface)",
               padding: "8px 10px", borderRadius: 2, wordBreak: "break-all", userSelect: "all"
             }}>{url}</div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <button style={s.btn} onClick={async () => {
-                await navigator.clipboard.writeText(url).catch(() => {});
-                setCopied(true);
-              }}>
-                {copied ? "✓ copied" : "copy link"}
-              </button>
+            <button style={s.btn} onClick={async () => {
+              await navigator.clipboard.writeText(url).catch(() => {});
+              setCopied(true);
+            }}>
+              {copied ? "✓ copied" : "copy link"}
+            </button>
+
+            {/* Editors */}
+            <div style={{ fontSize: 12, color: "var(--subtle)" }}>can edit:</div>
+            {editors === null ? (
+              <div style={{ fontSize: 12, color: "var(--pale)" }}>loading…</div>
+            ) : (
+              <>
+                {editors.length === 0 && (
+                  <div style={{ fontSize: 12, color: "var(--pale)" }}>no one yet — viewers are read-only</div>
+                )}
+                {editors.map(e => (
+                  <div key={e} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--dim)" }}>
+                    <span style={{ flex: 1 }}>✏ {e}</span>
+                    <button style={{ ...s.iconBtn, color: "var(--faint)", fontSize: 11 }} onClick={() => removeEmail(e)}>✕</button>
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    ref={emailRef}
+                    style={{ ...s.modalInput, flex: 1 }}
+                    type="email"
+                    placeholder="add editor email…"
+                    value={emailInput}
+                    onChange={e => setEmailInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addEmail(); } if (e.key === "Escape") onClose(); }}
+                  />
+                  <button style={s.btn} onClick={addEmail}>add</button>
+                </div>
+              </>
+            )}
+
+            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+              <button style={{ ...s.btn, color: "var(--error)", borderColor: "var(--error)" }} onClick={stopSharing}>stop sharing</button>
+              <span style={{ flex: 1 }} />
               <button style={{ ...s.btn, border: "none" }} onClick={onClose}>done</button>
             </div>
           </>
@@ -436,29 +516,41 @@ function ShareModal({ name, onShare, onClose }) {
 // ─── SHARED VIEW ──────────────────────────────────────────────────────────────
 
 function SharedView({ id }) {
-  const [data, setData] = useState(null);
+  const [data, setData] = useState(null);     // null = loading, false = not found
   const [path, setPath] = useState([]);
-  const [openPage, setOpenPage] = useState(null);
+  const [openPage, setOpenPage] = useState(null); // { name, nodePath }
   const [viewer, setViewer] = useState(undefined); // undefined = loading, null = signed out
 
-  useEffect(() => { loadShare(id).then(d => setData(d || false)); }, [id]);
+  // Live subscription — the view updates as the owner or editors save
+  useEffect(() => onSnapshot(
+    doc(db, "shared", id),
+    snap => setData(snap.exists()
+      ? { tree: JSON.parse(snap.data().tree), name: snap.data().name, allowedEditors: snap.data().allowedEditors || [] }
+      : false),
+    () => setData(false)
+  ), [id]);
   useEffect(() => onAuthStateChanged(auth, u => setViewer(u || null)), []);
 
+  // If a remote update removed what we're looking at, fall back gracefully
+  useEffect(() => {
+    if (!data) return;
+    if (path.length && !getNodeSafe(data.tree, path)) setPath([]);
+    if (openPage && !getNodeSafe(data.tree, openPage.nodePath)) setOpenPage(null);
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (data === null || viewer === undefined) return <div style={{ ...s.signIn, color: "var(--subtle)" }}>loading…</div>;
-  if (data === false) return <div style={{ ...s.signIn, color: "var(--subtle)" }}>link not found</div>;
+  if (data === false) return <div style={{ ...s.signIn, color: "var(--subtle)" }}>link not found or no longer shared</div>;
 
   const root = data.tree;
   const viewerEmail = viewer?.email?.toLowerCase() || null;
-  const editorsExist = data.allowedEditors.length > 0;
-  const canEdit = editorsExist && viewerEmail && data.allowedEditors.includes(viewerEmail);
-  const wrongAccount = editorsExist && viewer && !canEdit;
+  const canEdit = !!viewerEmail && data.allowedEditors.includes(viewerEmail);
 
   const badge = canEdit
     ? <span style={{ fontSize: 12, color: "var(--muted)" }}>shared · you can edit</span>
     : <span style={{ fontSize: 12, color: "var(--pale)" }}>shared · read only</span>;
 
-  // Prominent auth banner shown when edit access exists but viewer can't edit
-  const authBanner = editorsExist && !canEdit && (
+  // Banner shown to anyone who can't edit — sign in to claim edit access, or switch accounts
+  const authBanner = !canEdit && (
     <div style={{
       background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 2,
       padding: "12px 16px", marginBottom: 24, display: "flex",
@@ -466,35 +558,36 @@ function SharedView({ id }) {
     }}>
       {!viewer ? (
         <>
-          <span style={{ fontSize: 13, color: "var(--dim)", flex: 1 }}>this link has edit access for certain accounts</span>
+          <span style={{ fontSize: 13, color: "var(--dim)", flex: 1 }}>viewing read-only · sign in if you've been given edit access</span>
           <button style={s.btn} onClick={() => signInWithPopup(auth, new GoogleAuthProvider())}>
             sign in with google
           </button>
         </>
-      ) : wrongAccount ? (
+      ) : (
         <>
           <span style={{ fontSize: 13, color: "var(--dim)", flex: 1 }}>
-            signed in as <strong>{viewer.email}</strong> · not on the edit list
+            signed in as <strong>{viewer.email}</strong> · view only
           </span>
           <button style={s.btn} onClick={() => signOut(auth)}>switch account</button>
         </>
-      ) : null}
+      )}
     </div>
   );
 
-  // Save an edited page back to Firestore
+  // Editors save straight to the share doc; the owner's app pulls it in automatically
   async function savePageContent(content) {
     const newTree = JSON.parse(JSON.stringify(root));
-    const node = openPage.nodePath.reduce((n, p) => n.children[p], newTree);
-    node.content = content;
-    setData({ ...data, tree: newTree });
-    setOpenPage({ ...openPage, content });
+    const target = getNodeSafe(newTree, openPage ? openPage.nodePath : []);
+    if (!target) return;
+    target.content = content;
     await saveSharedTree(id, newTree);
   }
 
-  // ── Page editor view ──
-  if (root.type === "page" || openPage) {
-    const content = openPage ? openPage.content : root.content;
+  // ── Page view ──
+  // Content is derived from the live tree, so read-only viewers see edits appear
+  const pageNode = openPage ? getNodeSafe(root, openPage.nodePath) : null;
+  if (root.type === "page" || pageNode) {
+    const content = pageNode ? pageNode.content : root.content;
     const name = openPage ? openPage.name : data.name;
     return (
       <div style={s.editor}>
@@ -515,7 +608,7 @@ function SharedView({ id }) {
   }
 
   // ── Folder view ──
-  const folder = getNode(root, path);
+  const folder = getNodeSafe(root, path) || root;
   const items = Object.entries(folder.children).sort(([,a],[,b]) =>
     a.type === b.type ? 0 : a.type === "folder" ? -1 : 1
   );
@@ -536,7 +629,7 @@ function SharedView({ id }) {
           <button style={s.name} onClick={() =>
             node.type === "folder"
               ? setPath([...path, name])
-              : setOpenPage({ name, content: node.content, nodePath: [...path, name] })
+              : setOpenPage({ name, nodePath: [...path, name] })
           }>{name}</button>
         </div>
       ))}
@@ -571,28 +664,73 @@ export default function App() {
   const [promptFor, setPromptFor] = useState(null); // { name, node, action: "open"|"enter" }
   const [promptError, setPromptError] = useState(false);
 
-  // Share modal state
-  const [shareModal, setShareModal] = useState(null); // { name, node }
+  // Share modal state — node is looked up from the tree so it stays fresh
+  const [shareModal, setShareModal] = useState(null); // { name }
 
   // Refs for auto-focusing inputs
   const inputRef = useRef();
   const renameRef = useRef();
   const lockPasswordRef = useRef();
 
+  // Latest tree, readable inside the share listeners without re-subscribing
+  const treeRef = useRef(null);
+  treeRef.current = tree;
+
   // Auto-focus inputs when their state activates
   useEffect(() => { if (creating && inputRef.current) inputRef.current.focus(); }, [creating]);
   useEffect(() => { if (renaming && renameRef.current) renameRef.current.focus(); }, [renaming]);
   useEffect(() => { if (lockEnabled && lockPasswordRef.current) lockPasswordRef.current.focus(); }, [lockEnabled]);
 
-  // Load the user's tree from Firestore on sign-in
+  // Load the user's tree from Firestore on sign-in, then pull in any editor
+  // changes that happened in shared subtrees while the owner was away
   useEffect(() => onAuthStateChanged(auth, async (u) => {
     setUser(u);
-    if (u) setTree(await load(u.uid));
-    else setTree(null);
+    if (u) {
+      const loaded = await load(u.uid);
+      setTree(await syncShares(u.uid, loaded));
+    } else {
+      setTree(null);
+    }
   }), []);
 
-  // Save tree to Firestore and update local state
-  function update(newTree) { setTree(newTree); save(user.uid, newTree); }
+  // Live-sync shared subtrees while the app is open: when an editor saves,
+  // merge their change into the local tree and persist it
+  const shareIds = tree ? findShared(tree).map(e => e.node.sharedId).sort().join(",") : "";
+  useEffect(() => {
+    if (!user || !shareIds) return;
+    const unsubs = shareIds.split(",").map(shareId =>
+      onSnapshot(doc(db, "shared", shareId), snap => {
+        if (snap.metadata.hasPendingWrites || !treeRef.current) return; // ignore our own writes
+        const entry = findShared(treeRef.current).find(e => e.node.sharedId === shareId);
+        if (!entry) return;
+        const newTree = JSON.parse(JSON.stringify(treeRef.current));
+        if (!snap.exists()) {
+          // Share deleted elsewhere — drop the marker
+          delete getNode(newTree, entry.path).sharedId;
+        } else {
+          const remote = JSON.parse(snap.data().tree);
+          remote.sharedId = shareId;
+          if (JSON.stringify(remote) === JSON.stringify(entry.node)) return; // already in sync
+          const parent = getNode(newTree, entry.path.slice(0, -1));
+          parent.children[entry.path[entry.path.length - 1]] = remote;
+        }
+        setTree(newTree);
+        save(user.uid, newTree); // save directly — no push back to share docs (avoids loops)
+      })
+    );
+    return () => unsubs.forEach(u => u());
+  }, [user, shareIds]);
+
+  // Save tree to Firestore, update local state, and push shared subtrees live
+  function update(newTree) {
+    setTree(newTree);
+    save(user.uid, newTree);
+    for (const { path: p, node } of findShared(newTree)) {
+      setDoc(doc(db, "shared", node.sharedId), {
+        tree: JSON.stringify(node), name: p[p.length - 1],
+      }, { merge: true });
+    }
+  }
 
   // Verify password then open the locked item
   async function handlePromptConfirm(password) {
@@ -657,9 +795,10 @@ export default function App() {
     setLockPassword("");
   }
 
-  // Delete an item (with confirmation)
+  // Delete an item (with confirmation) — also deletes any share docs inside it
   function deleteItem(name) {
     if (!confirm(`Delete "${name}"?`)) return;
+    for (const { node } of findShared(folder.children[name], [name])) deleteShare(node.sharedId);
     const newTree = JSON.parse(JSON.stringify(tree));
     delete getNode(newTree, path).children[name];
     update(newTree);
@@ -679,16 +818,24 @@ export default function App() {
     if (openPage?.name === oldName) setOpenPage({ ...openPage, name: n });
   }
 
-  // Open the share modal for an item
-  function openShare(name, node) {
-    setShareModal({ name, node });
+  // ── Share actions (wired into ShareModal) ──
+
+  // Create the share doc and mark the node with its id
+  async function shareItem() {
+    const { name } = shareModal;
+    const id = await createShare(user.uid, folder.children[name], name);
+    const newTree = JSON.parse(JSON.stringify(tree));
+    getNode(newTree, path).children[name].sharedId = id;
+    update(newTree);
   }
 
-  // Create a share link and return its URL
-  async function doShare(allowedEditors) {
-    const { name, node } = shareModal;
-    const id = await createShare(node, name, allowedEditors);
-    return `${window.location.origin}/#share/${id}`;
+  // Delete the share doc and remove the marker
+  async function unshareItem() {
+    const { name } = shareModal;
+    await deleteShare(folder.children[name].sharedId);
+    const newTree = JSON.parse(JSON.stringify(tree));
+    delete getNode(newTree, path).children[name].sharedId;
+    update(newTree);
   }
 
   // Save page content back into the tree
@@ -733,10 +880,13 @@ export default function App() {
     <div style={s.app}>
 
       {/* Modals */}
-      {shareModal && (
+      {shareModal && folder.children[shareModal.name] && (
         <ShareModal
           name={shareModal.name}
-          onShare={doShare}
+          node={folder.children[shareModal.name]}
+          onCreate={shareItem}
+          onSetEditors={emails => saveShareEditors(folder.children[shareModal.name].sharedId, emails)}
+          onUnshare={unshareItem}
           onClose={() => setShareModal(null)}
         />
       )}
@@ -772,8 +922,9 @@ export default function App() {
               {node.locked ? "🔒 " : ""}{name}
             </button>
           )}
+          {node.sharedId && <span style={{ fontSize: 11, color: "var(--faint)" }} title="shared">⤴ shared</span>}
           <button style={s.iconBtn} title="rename" onClick={() => { setRenaming(name); setRenameTo(name); }}>✎</button>
-          <button style={s.iconBtn} title="share" onClick={() => openShare(name, node)}>⤴</button>
+          <button style={s.iconBtn} title="share" onClick={() => setShareModal({ name })}>⤴</button>
           <button style={s.iconBtn} onClick={() => deleteItem(name)}>✕</button>
         </div>
       ))}
