@@ -531,8 +531,13 @@ function SortMenu({ sortBy, filterBy, onSort, onFilter }) {
 
   return (
     <span style={{ position: "relative" }}>
-      <button style={{ ...s.iconBtn, fontSize: 13 }} title="sort & filter" onClick={() => setOpen(o => !o)}>
-        ⇅ sort{filterLabel}
+      <button style={{ ...s.iconBtn, fontSize: 13, display: "inline-flex", alignItems: "center", gap: 5 }} title="sort & filter" onClick={() => setOpen(o => !o)}>
+        <svg width="13" height="11" viewBox="0 0 13 11" aria-hidden="true">
+          <line x1="0" y1="1.5" x2="13" y2="1.5" stroke="currentColor" strokeWidth="1.5" />
+          <line x1="0" y1="5.5" x2="8" y2="5.5" stroke="currentColor" strokeWidth="1.5" />
+          <line x1="0" y1="9.5" x2="4" y2="9.5" stroke="currentColor" strokeWidth="1.5" />
+        </svg>
+        sort{filterLabel}
       </button>
       {open && (
         <>
@@ -546,6 +551,7 @@ function SortMenu({ sortBy, filterBy, onSort, onFilter }) {
             {item("default", sortBy === "default", () => onSort("default"))}
             {item("a–z", sortBy === "alpha", () => onSort("alpha"))}
             {item("newest first", sortBy === "newest", () => onSort("newest"))}
+            {item("manual", sortBy === "manual", () => onSort("manual"))}
           </div>
         </>
       )}
@@ -895,10 +901,14 @@ function Notebook() {
   const [menuFor, setMenuFor] = useState(null);
 
   // Sort & filter, persisted like the dark-mode preference
-  const [sortBy, setSortBy] = useState(localStorage.getItem("sortBy") || "default");   // default | alpha | newest
+  const [sortBy, setSortBy] = useState(localStorage.getItem("sortBy") || "default");   // default | alpha | newest | manual
   const [filterBy, setFilterBy] = useState(localStorage.getItem("filterBy") || "all"); // all | shared | notshared
   const setSort = v => { setSortBy(v); localStorage.setItem("sortBy", v); };
   const setFilter = v => { setFilterBy(v); localStorage.setItem("filterBy", v); };
+
+  // Drag-and-drop reordering state
+  const [dragName, setDragName] = useState(null);     // item being dragged
+  const [dragOverName, setDragOverName] = useState(null); // item being hovered
 
   // Items other people have shared with this account (by editor email)
   const [sharedWithMe, setSharedWithMe] = useState([]);
@@ -1133,15 +1143,52 @@ function Notebook() {
   if (filterBy === "notshared") entries = entries.filter(e => e.kind === "own" && !e.node.sharedId);
 
   // Folders always sit above pages; the chosen sort applies within each group.
+  // Manual mode is the exception: full freedom, in the user's dragged order,
+  // with shared-with-me items pinned after your own.
   // Items created before timestamps existed have created=0, so the index
   // tiebreaker keeps them in their original (creation) order.
   const rank = e => e.node.type === "folder" ? 0 : 1;
   entries.sort((a, b) => {
+    if (sortBy === "manual") {
+      if (a.kind !== b.kind) return a.kind === "own" ? -1 : 1;
+      if (a.kind === "own") return (a.node.order ?? a.index) - (b.node.order ?? b.index);
+      return (a.created - b.created) || (a.index - b.index);
+    }
     if (rank(a) !== rank(b)) return rank(a) - rank(b);
     if (sortBy === "alpha") return a.name.localeCompare(b.name);
     if (sortBy === "newest") return (b.created - a.created) || (a.index - b.index);
     return (a.created - b.created) || (a.index - b.index); // default: creation order
   });
+
+  // Drop the dragged item onto a target: capture the currently displayed order,
+  // apply the move, stamp every item in this folder with its new position, and
+  // switch to manual sort so the arrangement sticks.
+  function handleDrop(targetName) {
+    const cleanup = () => { setDragName(null); setDragOverName(null); };
+    if (!dragName || dragName === targetName) return cleanup();
+    const ownNames = entries.filter(e => e.kind === "own").map(e => e.name);
+    const from = ownNames.indexOf(dragName);
+    const to = ownNames.indexOf(targetName);
+    if (from === -1 || to === -1) return cleanup();
+    ownNames.splice(from, 1);
+    ownNames.splice(to, 0, dragName);
+    const newTree = JSON.parse(JSON.stringify(tree));
+    const children = getNode(newTree, path).children;
+    ownNames.forEach((n, i) => { children[n].order = i; });
+    update(newTree);
+    setSort("manual");
+    cleanup();
+  }
+
+  // Leave a share someone added you to: remove your own email from its editor
+  // list. It disappears from your notebook; the owner's content is untouched.
+  async function leaveShare(sh) {
+    if (!confirm(`Remove "${sh.name}" from your notebook? You'll lose edit access until the owner re-adds you.`)) return;
+    const snap = await getDoc(doc(db, "shared", sh.shareId));
+    if (!snap.exists()) return;
+    const editors = (snap.data().allowedEditors || []).filter(e => e !== user.email.toLowerCase());
+    await setDoc(doc(db, "shared", sh.shareId), { allowedEditors: editors }, { merge: true });
+  }
 
   // ── Page editor view ──
   if (openPage) {
@@ -1202,7 +1249,19 @@ function Notebook() {
         </div>
       )}
       {entries.map(e => e.kind === "own" ? (
-        <div key={e.name} style={s.row}>
+        <div
+          key={e.name}
+          style={{
+            ...s.row,
+            ...(dragOverName === e.name && dragName !== e.name ? { borderTop: "2px solid var(--muted)" } : {}),
+            opacity: dragName === e.name ? 0.4 : 1,
+          }}
+          draggable={renaming !== e.name}
+          onDragStart={() => setDragName(e.name)}
+          onDragOver={ev => { ev.preventDefault(); if (dragOverName !== e.name) setDragOverName(e.name); }}
+          onDrop={ev => { ev.preventDefault(); handleDrop(e.name); }}
+          onDragEnd={() => { setDragName(null); setDragOverName(null); }}
+        >
           <span style={s.icon}>{e.node.type === "folder" ? "▶" : "·"}</span>
           {renaming === e.name ? (
             <input ref={renameRef} style={s.inlineInput} value={renameTo}
@@ -1228,6 +1287,7 @@ function Notebook() {
           <span style={s.icon}>{e.node.type === "folder" ? "▶" : "·"}</span>
           <button style={s.name} onClick={() => { window.location.hash = `share/${e.shareId}`; }}>{e.name}</button>
           <span style={{ fontSize: 11, color: "var(--faint)" }} title="someone shared this with you">↪ shared with me</span>
+          <button style={s.iconBtn} title="remove from my notebook" onClick={() => leaveShare(e)}>✕</button>
         </div>
       ))}
 
