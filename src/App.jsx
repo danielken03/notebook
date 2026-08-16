@@ -362,6 +362,30 @@ const s = {
     textDecoration: "underline",
   },
 
+  // item ⋮ menu
+  menu: {
+    position: "absolute",
+    right: 0,
+    top: 22,
+    background: "var(--bg)",
+    border: "1px solid var(--border)",
+    borderRadius: 2,
+    display: "flex",
+    flexDirection: "column",
+    zIndex: 51,
+    minWidth: 110,
+  },
+  menuItem: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    fontFamily: "var(--font)",
+    fontSize: 13,
+    color: "var(--dim)",
+    padding: "8px 14px",
+    textAlign: "left",
+  },
+
   // modals
   modal: {
     position: "fixed",
@@ -448,6 +472,33 @@ function PasswordModal({ title, onConfirm, onCancel, error }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// ⋮ menu shown on each item row — opens a small dropdown with the item actions.
+// Clicking anywhere else (via the invisible backdrop) or pressing Escape closes it.
+function ItemMenu({ open, onToggle, onRename, onShare, onDelete }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = e => { if (e.key === "Escape") onToggle(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <span style={{ position: "relative" }}>
+      <button style={{ ...s.iconBtn, fontSize: 14 }} title="options" onClick={onToggle}>⋮</button>
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 50 }} onClick={onToggle} />
+          <div style={s.menu}>
+            <button style={s.menuItem} onClick={() => { onToggle(); onRename(); }}>✎ rename</button>
+            <button style={s.menuItem} onClick={() => { onToggle(); onShare(); }}>⤴ share</button>
+            <button style={{ ...s.menuItem, color: "var(--error)" }} onClick={() => { onToggle(); onDelete(); }}>✕ delete</button>
+          </div>
+        </>
+      )}
+    </span>
   );
 }
 
@@ -789,6 +840,9 @@ function Notebook() {
   // Share modal state — node is looked up from the tree so it stays fresh
   const [shareModal, setShareModal] = useState(null); // { name }
 
+  // Which item's ⋮ menu is open (item name, or null)
+  const [menuFor, setMenuFor] = useState(null);
+
   // Items other people have shared with this account (by editor email)
   const [sharedWithMe, setSharedWithMe] = useState([]);
 
@@ -1070,9 +1124,13 @@ function Notebook() {
             </button>
           )}
           {node.sharedId && <span style={{ fontSize: 11, color: "var(--faint)" }} title="shared">⤴ shared</span>}
-          <button style={s.iconBtn} title="rename" onClick={() => { setRenaming(name); setRenameTo(name); }}>✎</button>
-          <button style={s.iconBtn} title="share" onClick={() => setShareModal({ name })}>⤴</button>
-          <button style={s.iconBtn} onClick={() => deleteItem(name)}>✕</button>
+          <ItemMenu
+            open={menuFor === name}
+            onToggle={() => setMenuFor(menuFor === name ? null : name)}
+            onRename={() => { setRenaming(name); setRenameTo(name); }}
+            onShare={() => setShareModal({ name })}
+            onDelete={() => deleteItem(name)}
+          />
         </div>
       ))}
 
