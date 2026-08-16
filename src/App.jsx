@@ -109,7 +109,7 @@ async function createShare(uid, node, name) {
   const id = Math.random().toString(36).slice(2, 12);
   const subtree = { ...node, sharedId: id };
   await setDoc(doc(db, "shared", id), {
-    ownerUid: uid, name, tree: JSON.stringify(subtree), allowedEditors: [],
+    ownerUid: uid, name, tree: JSON.stringify(subtree), allowedEditors: [], created: Date.now(),
   });
   return id;
 }
@@ -385,6 +385,13 @@ const s = {
     padding: "8px 14px",
     textAlign: "left",
   },
+  menuLabel: {
+    fontSize: 10,
+    color: "var(--faint)",
+    padding: "8px 14px 2px",
+    borderBottom: "1px solid var(--border)",
+    marginBottom: 2,
+  },
 
   // modals
   modal: {
@@ -493,8 +500,52 @@ function ItemMenu({ open, onToggle, onRename, onShare, onDelete }) {
           <div style={{ position: "fixed", inset: 0, zIndex: 50 }} onClick={onToggle} />
           <div style={s.menu}>
             <button style={s.menuItem} onClick={() => { onToggle(); onRename(); }}>✎ rename</button>
-            <button style={s.menuItem} onClick={() => { onToggle(); onShare(); }}>⤴ share</button>
+            <button style={s.menuItem} onClick={() => { onToggle(); onShare(); }}>↪ share</button>
             <button style={{ ...s.menuItem, color: "var(--error)" }} onClick={() => { onToggle(); onDelete(); }}>✕ delete</button>
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
+// Sort & filter dropdown — filter between all / shared / not shared (like an
+// email client's all vs unread), and sort by default, a–z, or newest first.
+function SortMenu({ sortBy, filterBy, onSort, onFilter }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = e => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  const item = (label, active, fn) => (
+    <button
+      style={{ ...s.menuItem, color: active ? "var(--text)" : "var(--dim)" }}
+      onClick={() => { fn(); setOpen(false); }}
+    >{active ? "✓ " : "· "}{label}</button>
+  );
+
+  const filterLabel = filterBy === "shared" ? " · shared" : filterBy === "notshared" ? " · not shared" : "";
+
+  return (
+    <span style={{ position: "relative" }}>
+      <button style={{ ...s.iconBtn, fontSize: 13 }} title="sort & filter" onClick={() => setOpen(o => !o)}>
+        ⇅ sort{filterLabel}
+      </button>
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 50 }} onClick={() => setOpen(false)} />
+          <div style={{ ...s.menu, minWidth: 150 }}>
+            <div style={s.menuLabel}>show</div>
+            {item("all", filterBy === "all", () => onFilter("all"))}
+            {item("shared", filterBy === "shared", () => onFilter("shared"))}
+            {item("not shared", filterBy === "notshared", () => onFilter("notshared"))}
+            <div style={s.menuLabel}>sort by</div>
+            {item("default", sortBy === "default", () => onSort("default"))}
+            {item("a–z", sortBy === "alpha", () => onSort("alpha"))}
+            {item("newest first", sortBy === "newest", () => onSort("newest"))}
           </div>
         </>
       )}
@@ -843,6 +894,12 @@ function Notebook() {
   // Which item's ⋮ menu is open (item name, or null)
   const [menuFor, setMenuFor] = useState(null);
 
+  // Sort & filter, persisted like the dark-mode preference
+  const [sortBy, setSortBy] = useState(localStorage.getItem("sortBy") || "default");   // default | alpha | newest
+  const [filterBy, setFilterBy] = useState(localStorage.getItem("filterBy") || "all"); // all | shared | notshared
+  const setSort = v => { setSortBy(v); localStorage.setItem("sortBy", v); };
+  const setFilter = v => { setFilterBy(v); localStorage.setItem("filterBy", v); };
+
   // Items other people have shared with this account (by editor email)
   const [sharedWithMe, setSharedWithMe] = useState([]);
 
@@ -879,7 +936,11 @@ function Notebook() {
     return onSnapshot(q, snap =>
       setSharedWithMe(snap.docs
         .filter(d => d.data().ownerUid !== user.uid)
-        .map(d => ({ id: d.id, name: d.data().name }))
+        .map(d => {
+          let type = "page";
+          try { type = JSON.parse(d.data().tree).type; } catch { /* keep default */ }
+          return { id: d.id, name: d.data().name, type, created: d.data().created || 0 };
+        })
       ), () => setSharedWithMe([]));
   }, [user]);
 
@@ -972,8 +1033,8 @@ function Notebook() {
 
     const newTree = JSON.parse(JSON.stringify(tree));
     const newNode = creating === "folder"
-      ? { type: "folder", children: {}, ...(passwordHash && { locked: true, passwordHash }) }
-      : { type: "page", content: "", ...(passwordHash && { locked: true, passwordHash }) };
+      ? { type: "folder", children: {}, created: Date.now(), ...(passwordHash && { locked: true, passwordHash }) }
+      : { type: "page", content: "", created: Date.now(), ...(passwordHash && { locked: true, passwordHash }) };
 
     getNode(newTree, path).children[name] = newNode;
     update(newTree);
@@ -1055,9 +1116,32 @@ function Notebook() {
   if (!tree) return <div style={{ ...s.signIn, color: "var(--subtle)" }}>loading…</div>;
 
   const folder = getNode(tree, path);
-  const items = Object.entries(folder.children).sort(([,a],[,b]) =>
-    a.type === b.type ? 0 : a.type === "folder" ? -1 : 1
-  );
+
+  // ── Build the item list: own items + shared-with-me (at root), filtered & sorted ──
+  // Entries: { kind: "own"|"sharedWithMe", name, node, created, index, shareId? }
+  let entries = Object.entries(folder.children).map(([name, node], index) => ({
+    kind: "own", name, node, created: node.created || 0, index,
+  }));
+  if (path.length === 0) {
+    entries = entries.concat(sharedWithMe.map((sh, i) => ({
+      kind: "sharedWithMe", name: sh.name, node: { type: sh.type },
+      created: sh.created, index: 100000 + i, shareId: sh.id,
+    })));
+  }
+
+  if (filterBy === "shared") entries = entries.filter(e => e.kind === "sharedWithMe" || e.node.sharedId);
+  if (filterBy === "notshared") entries = entries.filter(e => e.kind === "own" && !e.node.sharedId);
+
+  // Folders always sit above pages; the chosen sort applies within each group.
+  // Items created before timestamps existed have created=0, so the index
+  // tiebreaker keeps them in their original (creation) order.
+  const rank = e => e.node.type === "folder" ? 0 : 1;
+  entries.sort((a, b) => {
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
+    if (sortBy === "alpha") return a.name.localeCompare(b.name);
+    if (sortBy === "newest") return (b.created - a.created) || (a.index - b.index);
+    return (a.created - b.created) || (a.index - b.index); // default: creation order
+  });
 
   // ── Page editor view ──
   if (openPage) {
@@ -1106,31 +1190,44 @@ function Notebook() {
         <button style={s.crumb} onClick={() => signOut(auth)}>{user.displayName} · sign out</button>
       </Breadcrumbs>
 
+      {/* Sort & filter row */}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <SortMenu sortBy={sortBy} filterBy={filterBy} onSort={setSort} onFilter={setFilter} />
+      </div>
+
       {/* Items list */}
-      {items.length === 0 && !creating && (
-        <div style={{ color: "var(--pale)", fontSize: 13, marginBottom: 24 }}>empty — add something below</div>
+      {entries.length === 0 && !creating && (
+        <div style={{ color: "var(--pale)", fontSize: 13, marginBottom: 24 }}>
+          {filterBy === "all" ? "empty — add something below" : "nothing matches this filter"}
+        </div>
       )}
-      {items.map(([name, node]) => (
-        <div key={name} style={s.row}>
-          <span style={s.icon}>{node.type === "folder" ? "▶" : "·"}</span>
-          {renaming === name ? (
+      {entries.map(e => e.kind === "own" ? (
+        <div key={e.name} style={s.row}>
+          <span style={s.icon}>{e.node.type === "folder" ? "▶" : "·"}</span>
+          {renaming === e.name ? (
             <input ref={renameRef} style={s.inlineInput} value={renameTo}
-              onChange={e => setRenameTo(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") rename(name); if (e.key === "Escape") setRenaming(null); }}
-              onBlur={() => rename(name)} />
+              onChange={ev => setRenameTo(ev.target.value)}
+              onKeyDown={ev => { if (ev.key === "Enter") rename(e.name); if (ev.key === "Escape") setRenaming(null); }}
+              onBlur={() => rename(e.name)} />
           ) : (
-            <button style={s.name} onClick={() => handleItemClick(name, node)}>
-              {node.locked ? "🔒 " : ""}{name}
+            <button style={s.name} onClick={() => handleItemClick(e.name, e.node)}>
+              {e.node.locked ? "🔒 " : ""}{e.name}
             </button>
           )}
-          {node.sharedId && <span style={{ fontSize: 11, color: "var(--faint)" }} title="shared">⤴ shared</span>}
+          {e.node.sharedId && <span style={{ fontSize: 11, color: "var(--faint)" }} title="shared">↪ shared</span>}
           <ItemMenu
-            open={menuFor === name}
-            onToggle={() => setMenuFor(menuFor === name ? null : name)}
-            onRename={() => { setRenaming(name); setRenameTo(name); }}
-            onShare={() => setShareModal({ name })}
-            onDelete={() => deleteItem(name)}
+            open={menuFor === e.name}
+            onToggle={() => setMenuFor(menuFor === e.name ? null : e.name)}
+            onRename={() => { setRenaming(e.name); setRenameTo(e.name); }}
+            onShare={() => setShareModal({ name: e.name })}
+            onDelete={() => deleteItem(e.name)}
           />
+        </div>
+      ) : (
+        <div key={`swm-${e.shareId}`} style={s.row}>
+          <span style={s.icon}>{e.node.type === "folder" ? "▶" : "·"}</span>
+          <button style={s.name} onClick={() => { window.location.hash = `share/${e.shareId}`; }}>{e.name}</button>
+          <span style={{ fontSize: 11, color: "var(--faint)" }} title="someone shared this with you">↪ shared with me</span>
         </div>
       ))}
 
@@ -1172,19 +1269,6 @@ function Notebook() {
         <button style={s.btn} onClick={() => { setCreating("page"); setNewName(""); }}>+ page</button>
         <button style={s.btn} onClick={() => { setCreating("folder"); setNewName(""); }}>+ folder</button>
       </div>
-
-      {/* Shared with me */}
-      {path.length === 0 && sharedWithMe.length > 0 && (
-        <div style={{ marginTop: 40 }}>
-          <div style={{ fontSize: 12, color: "var(--subtle)", marginBottom: 4 }}>shared with me</div>
-          {sharedWithMe.map(sh => (
-            <div key={sh.id} style={s.row}>
-              <span style={s.icon}>⤴</span>
-              <button style={s.name} onClick={() => { window.location.hash = `share/${sh.id}`; }}>{sh.name}</button>
-            </div>
-          ))}
-        </div>
-      )}
 
     </div>
   );
