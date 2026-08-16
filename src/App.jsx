@@ -70,6 +70,64 @@ function toggleDark() {
   localStorage.setItem("dark", dark);
 }
 
+// ─── LUCKY DICE ───────────────────────────────────────────────────────────────
+// Signature easter egg: a tiny rollable die in the bottom-right corner.
+// Fair 1–6 with a 0.001% chance of a 7 — gold face, toast, and confetti that
+// falls until refresh. Colors follow the app's CSS variables, so it adapts to
+// light/dark mode automatically. Runs at module load, outside React.
+
+(() => {
+  const SEVEN_CHANCE = .00001; // 0.001%
+  const diceStyle = document.createElement("style");
+  diceStyle.textContent = `
+  .ld-area{position:fixed;bottom:14px;right:14px;display:flex;flex-direction:column;align-items:flex-end;gap:8px;z-index:40;user-select:none}
+  .ld-die{width:36px;height:36px;border:2px solid var(--faint);border-radius:7px;background:var(--surface);display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);padding:5px;cursor:pointer;transition:transform .1s}
+  .ld-die:active{transform:scale(.93)}.ld-die.rolling{animation:ldshake .4s infinite}
+  @keyframes ldshake{25%{transform:rotate(-8deg)}75%{transform:rotate(8deg)}}
+  .ld-pip{width:6px;height:6px;border-radius:50%;background:var(--text);align-self:center;justify-self:center;visibility:hidden}.ld-pip.on{visibility:visible}
+  .ld-pip:nth-child(1){grid-area:1/1}.ld-pip:nth-child(2){grid-area:1/3}.ld-pip:nth-child(3){grid-area:2/2}.ld-pip:nth-child(4){grid-area:3/1}.ld-pip:nth-child(5){grid-area:3/3}.ld-pip:nth-child(6){grid-area:2/1}.ld-pip:nth-child(7){grid-area:2/3}
+  .ld-die.seven{border-color:#C9A76B;background:rgba(201,167,107,.12)}.ld-die.seven .ld-pip{background:#C9A76B}
+  .ld-msg{font:12px/1 var(--font);background:#C9A76B;color:var(--bg);padding:8px 12px;border-radius:7px;opacity:0;transform:translateY(8px);transition:.4s;pointer-events:none;white-space:nowrap}.ld-msg.show{opacity:1;transform:none}
+  .ld-cv{position:fixed;inset:0;pointer-events:none;z-index:39}
+  @media(prefers-reduced-motion:reduce){.ld-die.rolling{animation:none}}
+  `;
+  document.head.appendChild(diceStyle);
+  document.body.insertAdjacentHTML("beforeend", `<canvas class="ld-cv"></canvas><div class="ld-area"><div class="ld-msg">wait a 7? umm... Congrats!</div><div class="ld-die" role="button" tabindex="0" aria-label="Roll the dice"></div></div>`);
+  const die = document.querySelector(".ld-die"), msg = document.querySelector(".ld-msg");
+  const FACES = { 1: [2], 2: [0, 4], 3: [0, 2, 4], 4: [0, 1, 3, 4], 5: [0, 1, 2, 3, 4], 6: [0, 1, 3, 4, 5, 6], 7: [0, 1, 2, 3, 4, 5, 6] }; // 0=TL 1=TR 2=C 3=BL 4=BR 5=ML 6=MR
+  const pips = Array.from({ length: 7 }, () => die.appendChild(Object.assign(document.createElement("span"), { className: "ld-pip" })));
+  const showFace = n => { die.classList.toggle("seven", n === 7); pips.forEach((p, i) => p.classList.toggle("on", FACES[n].includes(i))); };
+  const rnd6 = () => 1 + (Math.random() * 6 | 0);
+  let rolling = false, confettiOn = false;
+  const roll = () => {
+    if (rolling) return;
+    rolling = true; msg.classList.remove("show"); die.classList.add("rolling");
+    const shuffle = setInterval(() => showFace(rnd6()), 100);
+    setTimeout(() => {
+      clearInterval(shuffle); die.classList.remove("rolling");
+      const r = Math.random() < SEVEN_CHANCE ? 7 : rnd6(); showFace(r);
+      if (r === 7) { msg.classList.add("show"); startConfetti(); }
+      rolling = false;
+    }, 900);
+  };
+  die.addEventListener("click", roll);
+  die.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); roll(); } });
+  function startConfetti() { // falls until refresh; clicks push nearby pieces
+    if (confettiOn) return; confettiOn = true;
+    const cv = document.querySelector(".ld-cv"), ctx = cv.getContext("2d"), COLORS = ["#C9A76B", "#eb5757", "#56ccf2", "#6fcf97", "#bb6bd9", "#f2994a", "#F0F0F0"], pieces = [];
+    const resize = () => { cv.width = innerWidth; cv.height = innerHeight; }; resize(); addEventListener("resize", resize);
+    const spawn = top => pieces.push({ x: Math.random() * cv.width, y: top ? -20 : Math.random() * -cv.height, w: 6 + Math.random() * 6, h: 8 + Math.random() * 8, c: COLORS[Math.random() * 7 | 0], vy: 1.5 + Math.random() * 2.5, vx: (Math.random() - .5) * 1.5, px: 0, py: 0, rot: Math.random() * 7, vr: (Math.random() - .5) * .2, sw: Math.random() * 7 });
+    for (let i = 0; i < 120; i++) spawn(false);
+    addEventListener("pointerdown", e => { for (const p of pieces) { const dx = p.x - e.clientX, dy = p.y - e.clientY, d = Math.hypot(dx, dy); if (d < 150 && d > .01) { const f = (1 - d / 150) * 14; p.px += dx / d * f; p.py += dy / d * f; p.vr += (Math.random() - .5) * .4; } } });
+    (function tick() {
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      for (let i = pieces.length - 1; i >= 0; i--) { const p = pieces[i]; p.sw += .05; p.x += p.vx + p.px + Math.sin(p.sw) * .8; p.y += p.vy + p.py; p.rot += p.vr; p.px *= .92; p.py *= .92; ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.fillStyle = p.c; ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h); ctx.restore(); if (p.y > cv.height + 20) { pieces.splice(i, 1); spawn(true); } }
+      requestAnimationFrame(tick);
+    })();
+  }
+  showFace(1);
+})();
+
 // ─── UTILITIES ────────────────────────────────────────────────────────────────
 
 async function hashPassword(password) {
