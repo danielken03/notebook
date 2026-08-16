@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
-import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot } from "firebase/firestore";
+import { getFirestore, doc, getDoc, setDoc, deleteDoc, onSnapshot, collection, query, where } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyA1nVimSTwFWvAPbMQ3ZT7RIrrHZyvUQIo",
@@ -101,7 +101,7 @@ function getNodeSafe(tree, path) {
 
 // ─── SHARING ──────────────────────────────────────────────────────────────────
 // The share doc is the single live copy of a shared subtree:
-//   shared/{id} = { ownerUid, name, tree, allowedEditors }
+//   shared/{id} = { ownerUid, name, tree, allowedEditors, presence }
 // The owner's node keeps a `sharedId` marker. The owner pushes to the share doc
 // on every save and pulls remote edits back in (on load + live while open).
 
@@ -138,6 +138,18 @@ function findShared(node, path = [], out = []) {
   return out;
 }
 
+// Find which share (if any) a node lives inside — nearest sharedId wins
+function findShareIdFor(tree, nodePath) {
+  let node = tree;
+  let id = node.sharedId || null;
+  for (const p of nodePath) {
+    node = node.children?.[p];
+    if (!node) return id;
+    if (node.sharedId) id = node.sharedId;
+  }
+  return id;
+}
+
 // Pull each share doc's tree into the owner's tree (share doc is authoritative,
 // since editors may have made changes while the owner was away). Saves if changed.
 async function syncShares(uid, tree) {
@@ -165,6 +177,50 @@ async function syncShares(uid, tree) {
   }
   if (changed) await save(uid, newTree);
   return newTree;
+}
+
+// ─── PRESENCE ─────────────────────────────────────────────────────────────────
+// While someone with edit rights has a shared page open, they heartbeat a
+// presence entry on the share doc every 10s. Everyone viewing that share sees
+// who else is currently there. Entries older than 25s are treated as gone.
+
+function usePresence(shareId, sender) {
+  const [names, setNames] = useState([]);
+  useEffect(() => {
+    if (!shareId) { setNames([]); return; }
+    const key = sender?.uid || null;
+    let interval;
+    if (sender) {
+      const name = (sender.displayName || sender.email).split(" ")[0];
+      const send = () => setDoc(doc(db, "shared", shareId),
+        { presence: { [key]: { name, ts: Date.now() } } }, { merge: true }).catch(() => {});
+      send();
+      interval = setInterval(send, 10000);
+    }
+    const unsub = onSnapshot(doc(db, "shared", shareId), snap => {
+      const p = snap.data()?.presence || {};
+      setNames(Object.entries(p)
+        .filter(([k, v]) => k !== key && Date.now() - v.ts < 25000)
+        .map(([, v]) => v.name));
+    });
+    return () => {
+      clearInterval(interval);
+      unsub();
+      // Announce departure so the badge clears promptly for others
+      if (sender) setDoc(doc(db, "shared", shareId),
+        { presence: { [key]: { name: "", ts: 0 } } }, { merge: true }).catch(() => {});
+    };
+  }, [shareId, sender?.uid]); // eslint-disable-line react-hooks/exhaustive-deps
+  return names;
+}
+
+function PresenceBadge({ names }) {
+  if (names.length === 0) return null;
+  return (
+    <span style={{ fontSize: 12, color: "var(--muted)" }}>
+      ✏ {names.join(", ")} {names.length === 1 ? "is" : "are"} editing
+    </span>
+  );
 }
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
@@ -395,6 +451,64 @@ function PasswordModal({ title, onConfirm, onCancel, error }) {
   );
 }
 
+// Textarea with debounced autosave (500ms after typing stops), a manual save
+// button, and a status indicator. Applies incoming remote updates whenever the
+// user isn't actively editing, so live changes appear without clobbering typing.
+function AutoSaveArea({ value, onSave, children }) {
+  const ref = useRef();
+  const timer = useRef(null);
+  const pending = useRef(null); // latest unsaved text, null = clean
+  const onSaveRef = useRef(onSave);
+  onSaveRef.current = onSave;
+  const [status, setStatus] = useState("saved");
+
+  // Apply remote updates when not focused and nothing is unsaved locally
+  useEffect(() => {
+    if (ref.current && document.activeElement !== ref.current
+        && pending.current === null && ref.current.value !== value) {
+      ref.current.value = value;
+    }
+  }, [value]);
+
+  async function doSave() {
+    clearTimeout(timer.current);
+    if (pending.current === null) return;
+    const text = pending.current;
+    pending.current = null;
+    setStatus("saving");
+    await onSaveRef.current(text);
+    setStatus("saved");
+  }
+
+  function onChange(e) {
+    pending.current = e.target.value;
+    setStatus("unsaved");
+    clearTimeout(timer.current);
+    timer.current = setTimeout(doSave, 500);
+  }
+
+  // Flush any unsaved text when leaving the page
+  useEffect(() => () => {
+    clearTimeout(timer.current);
+    if (pending.current !== null) onSaveRef.current(pending.current);
+  }, []);
+
+  return (
+    <>
+      <textarea ref={ref} style={s.textarea} defaultValue={value} placeholder="Start writing…"
+        onChange={onChange} onBlur={doSave} autoFocus />
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
+        <button style={s.btn} onClick={doSave}>save</button>
+        <span style={{ fontSize: 12, color: "var(--pale)" }}>
+          {status === "saved" ? "✓ saved" : status === "saving" ? "saving…" : "unsaved changes…"}
+        </span>
+        <span style={{ flex: 1 }} />
+        {children}
+      </div>
+    </>
+  );
+}
+
 // Share modal — creates a link for unshared items, manages an existing share
 // (copy link, add/remove editors, stop sharing) for shared ones.
 function ShareModal({ name, node, onCreate, onSetEditors, onUnshare, onClose }) {
@@ -472,7 +586,7 @@ function ShareModal({ name, node, onCreate, onSetEditors, onUnshare, onClose }) 
             </button>
 
             {/* Editors */}
-            <div style={{ fontSize: 12, color: "var(--subtle)" }}>can edit:</div>
+            <div style={{ fontSize: 12, color: "var(--subtle)" }}>can edit (it will appear in their notebook):</div>
             {editors === null ? (
               <div style={{ fontSize: 12, color: "var(--pale)" }}>loading…</div>
             ) : (
@@ -538,12 +652,17 @@ function SharedView({ id }) {
     if (openPage && !getNodeSafe(data.tree, openPage.nodePath)) setOpenPage(null);
   }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Presence: heartbeat while an editor has a page open; everyone sees who's there
+  const viewerEmail = viewer?.email?.toLowerCase() || null;
+  const canEdit = !!(data && viewerEmail && data.allowedEditors.includes(viewerEmail));
+  const inPage = !!(data && (data.tree.type === "page" || (openPage && getNodeSafe(data.tree, openPage.nodePath))));
+  const present = usePresence(inPage ? id : null, canEdit ? viewer : null);
+
   if (data === null || viewer === undefined) return <div style={{ ...s.signIn, color: "var(--subtle)" }}>loading…</div>;
   if (data === false) return <div style={{ ...s.signIn, color: "var(--subtle)" }}>link not found or no longer shared</div>;
 
   const root = data.tree;
-  const viewerEmail = viewer?.email?.toLowerCase() || null;
-  const canEdit = !!viewerEmail && data.allowedEditors.includes(viewerEmail);
+  const goHome = () => { window.location.hash = ""; };
 
   const badge = canEdit
     ? <span style={{ fontSize: 12, color: "var(--muted)" }}>shared · you can edit</span>
@@ -584,7 +703,7 @@ function SharedView({ id }) {
   }
 
   // ── Page view ──
-  // Content is derived from the live tree, so read-only viewers see edits appear
+  // Content is derived from the live tree, so viewers see edits appear
   const pageNode = openPage ? getNodeSafe(root, openPage.nodePath) : null;
   if (root.type === "page" || pageNode) {
     const content = pageNode ? pageNode.content : root.content;
@@ -592,17 +711,22 @@ function SharedView({ id }) {
     return (
       <div style={s.editor}>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 24, gap: 12 }}>
-          {openPage && <button style={{ ...s.back, marginBottom: 0 }} onClick={() => setOpenPage(null)}>← back</button>}
+          {openPage
+            ? <button style={{ ...s.back, marginBottom: 0 }} onClick={() => setOpenPage(null)}>← back</button>
+            : viewer && <button style={{ ...s.back, marginBottom: 0 }} onClick={goHome}>← my notebook</button>}
           <span style={{ flex: 1 }} />
+          <PresenceBadge names={present} />
           <DarkToggle />
         </div>
         {authBanner}
         <div style={{ fontSize: 18, marginBottom: 12, color: "var(--text)" }}>{name}</div>
         {canEdit
-          ? <textarea style={s.textarea} defaultValue={content} placeholder="Start writing…" onBlur={e => savePageContent(e.target.value)} autoFocus />
-          : <div style={{ ...s.textarea, whiteSpace: "pre-wrap", overflow: "auto" }}>{content || <span style={{ color: "var(--pale)" }}>empty page</span>}</div>
+          ? <AutoSaveArea value={content} onSave={savePageContent}>{badge}</AutoSaveArea>
+          : <>
+              <div style={{ ...s.textarea, whiteSpace: "pre-wrap", overflow: "auto" }}>{content || <span style={{ color: "var(--pale)" }}>empty page</span>}</div>
+              <div style={{ marginTop: 16 }}>{badge}</div>
+            </>
         }
-        <div style={{ marginTop: 16 }}>{badge}</div>
       </div>
     );
   }
@@ -616,6 +740,7 @@ function SharedView({ id }) {
   return (
     <div style={s.app}>
       <Breadcrumbs root={data.name} path={path} setPath={setPath}>
+        {viewer && <button style={s.crumb} onClick={goHome}>my notebook</button>}
         <DarkToggle />
         {badge}
       </Breadcrumbs>
@@ -638,17 +763,14 @@ function SharedView({ id }) {
   );
 }
 
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+// ─── NOTEBOOK (owner's app) ───────────────────────────────────────────────────
 
-export default function App() {
-  const shareMatch = window.location.hash.match(/^#share\/(.+)/);
-  if (shareMatch) return <SharedView id={shareMatch[1]} />;
-
+function Notebook() {
   // Navigation & content state
   const [user, setUser] = useState(undefined);
   const [tree, setTree] = useState(null);
   const [path, setPath] = useState([]);
-  const [openPage, setOpenPage] = useState(null);
+  const [openPage, setOpenPage] = useState(null); // { name }
 
   // Create / rename state
   const [creating, setCreating] = useState(null);
@@ -666,6 +788,9 @@ export default function App() {
 
   // Share modal state — node is looked up from the tree so it stays fresh
   const [shareModal, setShareModal] = useState(null); // { name }
+
+  // Items other people have shared with this account (by editor email)
+  const [sharedWithMe, setSharedWithMe] = useState([]);
 
   // Refs for auto-focusing inputs
   const inputRef = useRef();
@@ -692,6 +817,17 @@ export default function App() {
       setTree(null);
     }
   }), []);
+
+  // Live "shared with me": any share doc listing this account's email as editor
+  useEffect(() => {
+    if (!user?.email) { setSharedWithMe([]); return; }
+    const q = query(collection(db, "shared"), where("allowedEditors", "array-contains", user.email.toLowerCase()));
+    return onSnapshot(q, snap =>
+      setSharedWithMe(snap.docs
+        .filter(d => d.data().ownerUid !== user.uid)
+        .map(d => ({ id: d.id, name: d.data().name }))
+      ), () => setSharedWithMe([]));
+  }, [user]);
 
   // Live-sync shared subtrees while the app is open: when an editor saves,
   // merge their change into the local tree and persist it
@@ -721,6 +857,15 @@ export default function App() {
     return () => unsubs.forEach(u => u());
   }, [user, shareIds]);
 
+  // Close the open page if a remote update deleted it
+  useEffect(() => {
+    if (openPage && tree && !getNodeSafe(tree, [...path, openPage.name])) setOpenPage(null);
+  }, [tree]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Presence: if the open page lives inside a shared subtree, announce and listen
+  const activeShareId = tree && openPage ? findShareIdFor(tree, [...path, openPage.name]) : null;
+  const present = usePresence(activeShareId, user || null);
+
   // Save tree to Firestore, update local state, and push shared subtrees live
   function update(newTree) {
     setTree(newTree);
@@ -744,11 +889,8 @@ export default function App() {
     setPromptFor(null);
     setPromptError(false);
     if (action === "open") {
-      if (node.type === "folder") {
-        setPath([...path, name]);
-      } else {
-        setOpenPage({ name, content: node.content });
-      }
+      if (node.type === "folder") setPath([...path, name]);
+      else setOpenPage({ name });
     }
   }
 
@@ -760,7 +902,7 @@ export default function App() {
       return;
     }
     if (node.type === "folder") setPath([...path, name]);
-    else setOpenPage({ name, content: node.content });
+    else setOpenPage({ name });
   }
 
   // Create a new page or folder (with optional password lock)
@@ -815,7 +957,7 @@ export default function App() {
     delete node.children[oldName];
     update(newTree);
     setRenaming(null);
-    if (openPage?.name === oldName) setOpenPage({ ...openPage, name: n });
+    if (openPage?.name === oldName) setOpenPage({ name: n });
   }
 
   // ── Share actions (wired into ShareModal) ──
@@ -841,9 +983,10 @@ export default function App() {
   // Save page content back into the tree
   function savePage(content) {
     const newTree = JSON.parse(JSON.stringify(tree));
-    getNode(newTree, [...path, openPage.name]).content = content;
+    const node = getNodeSafe(newTree, [...path, openPage.name]);
+    if (!node) return;
+    node.content = content;
     update(newTree);
-    setOpenPage({ ...openPage, content });
   }
 
   // ── Loading / sign-in screens ──
@@ -863,17 +1006,21 @@ export default function App() {
   );
 
   // ── Page editor view ──
-  if (openPage) return (
-    <div style={s.editor}>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 24, gap: 12 }}>
-        <button style={{ ...s.back, marginBottom: 0 }} onClick={() => setOpenPage(null)}>← back</button>
-        <span style={{ flex: 1 }} />
-        <DarkToggle />
+  if (openPage) {
+    const openNode = getNodeSafe(tree, [...path, openPage.name]);
+    return (
+      <div style={s.editor}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 24, gap: 12 }}>
+          <button style={{ ...s.back, marginBottom: 0 }} onClick={() => setOpenPage(null)}>← back</button>
+          <span style={{ flex: 1 }} />
+          <PresenceBadge names={present} />
+          <DarkToggle />
+        </div>
+        <div style={{ fontSize: 18, marginBottom: 16, color: "var(--text)" }}>{openPage.name}</div>
+        <AutoSaveArea value={openNode?.content ?? ""} onSave={savePage} />
       </div>
-      <div style={{ fontSize: 18, marginBottom: 16, color: "var(--text)" }}>{openPage.name}</div>
-      <textarea style={s.textarea} defaultValue={openPage.content} placeholder="Start writing…" onBlur={e => savePage(e.target.value)} autoFocus />
-    </div>
-  );
+    );
+  }
 
   // ── Main folder view ──
   return (
@@ -968,6 +1115,37 @@ export default function App() {
         <button style={s.btn} onClick={() => { setCreating("folder"); setNewName(""); }}>+ folder</button>
       </div>
 
+      {/* Shared with me */}
+      {path.length === 0 && sharedWithMe.length > 0 && (
+        <div style={{ marginTop: 40 }}>
+          <div style={{ fontSize: 12, color: "var(--subtle)", marginBottom: 4 }}>shared with me</div>
+          {sharedWithMe.map(sh => (
+            <div key={sh.id} style={s.row}>
+              <span style={s.icon}>⤴</span>
+              <button style={s.name} onClick={() => { window.location.hash = `share/${sh.id}`; }}>{sh.name}</button>
+            </div>
+          ))}
+        </div>
+      )}
+
     </div>
   );
+}
+
+// ─── MAIN APP (router) ────────────────────────────────────────────────────────
+// Switches between the owner's notebook and a shared view based on the URL
+// hash, and reacts to hash changes so navigation works without a page reload.
+
+export default function App() {
+  const [hash, setHash] = useState(window.location.hash);
+  useEffect(() => {
+    const onHash = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  const shareMatch = hash.match(/^#share\/(.+)/);
+  return shareMatch
+    ? <SharedView key={shareMatch[1]} id={shareMatch[1]} />
+    : <Notebook />;
 }
